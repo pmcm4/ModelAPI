@@ -15,8 +15,8 @@ NOTE: PLEASE IGNORE THE /predict ENDPOINT IN RIVERCASTMODELAPI
 SPECIFIC TASK
 
 CREATE THE FOLLOWINMG ENDPOINT FOR BIDIRECTIONALMODEL:
-    getting raw data plot
-    getting clean data plot
-    getting attention scores
-    adding prediction to database
+    getting raw data plot,
+    getting clean data plot,
+    getting attention scores,
+    adding prediction to database,
     adding true valeus to database
