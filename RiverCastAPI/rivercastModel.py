@@ -35,7 +35,6 @@ class initiate_model():
     query = "SELECT * FROM rivercast.modelData;"
     result_dataFrame = pd.read_sql(query, mydb)
 
-    print(result_dataFrame.tail(10))
 
     # Specify the column to exclude (change 'column_to_exclude' to the actual column name)
     column_to_exclude = 'Date_Time'
@@ -352,7 +351,7 @@ decomposer = Transformer(
 
 decomposer.to(initiate_model.device)
 
-decomposer.load_state_dict(torch.load('transformer.pth'))
+decomposer.load_state_dict(torch.load('rivercast_transformer.pth'))
 
 decomposer.eval()  # set model on test mode
 
@@ -428,7 +427,6 @@ def getLatest_Datetime():
 
     cursor.execute("SELECT Date_Time FROM rivercast.modelData order by Date_Time DESC LIMIT 1")
     lastDTindex = cursor.fetchone()
-    print(lastDTindex)
 
 
     return lastDTindex
@@ -471,7 +469,6 @@ def updateMainData():
     weatherbit = f'https://api.weatherbit.io/v2.0/history/hourly?lat=14.679696901082357&lon=121.10970052493437&start_date={startDate}&end_date={endDate}&tz=local&key=2b382660ad4843188647514206bf330e'
     wbRes = requests.get(weatherbit)
     wbReq = wbRes.json()
-    print(startDate, endDate)
     try:
         wbReq = wbRes.json()
         wbitArr = []

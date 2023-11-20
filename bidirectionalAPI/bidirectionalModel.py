@@ -26,7 +26,7 @@ password="Nath1234",
 database= "rivercast"
 )
 
-class initiate_model():
+class bi_initiate_model():
     #IMPORTING
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # configure GPU    utilization
     device
@@ -35,15 +35,14 @@ class initiate_model():
     query = "SELECT * FROM rivercast.modelData;"
     result_dataFrame = pd.read_sql(query, mydb)
 
-    print(result_dataFrame.tail(10))
 
     # Specify the column to exclude (change 'column_to_exclude' to the actual column name)
-    column_to_exclude = 'Date_Time'
+    column_to_exclude = ['Date_Time', 'RF-Intensity.1']
 
     # Exclude the specified column
     df = result_dataFrame.drop(column_to_exclude, axis=1, errors='ignore')
 
-    # Print the DataFrame without the excluded column
+
 
     # Now 'df' can be used as 'mainDataToDB' or for further processing
 
@@ -62,7 +61,7 @@ class initiate_model():
     df = df.drop(['Datetime'], axis=1)
 
     # select the parameters
-    df = df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3', 'RF-Intensity', 'RF-Intensity.1', 'RF-Intensity.2', 'RF-Intensity.3', 'Precipitation', 'Precipitation.1', 'Precipitation.2', 'Humidity', 'Humidity.1', 'Humidity.2', 'Temperature', 'Temperature.1', 'Temperature.2']] 
+    df = df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3', 'RF-Intensity', 'RF-Intensity.2', 'RF-Intensity.3', 'Precipitation', 'Precipitation.1', 'Precipitation.2', 'Humidity', 'Humidity.1', 'Humidity.2', 'Temperature', 'Temperature.1', 'Temperature.2']] 
     df = df.astype(np.float64)  # convert parameters into a double precision floating number
 
     # fill in missing values using linear interpolation
@@ -223,23 +222,21 @@ decomposer = Transformer(
     dropout=DROPOUT
 ).float()
 
-decomposer.to(initiate_model.device)
+decomposer.to(bi_initiate_model.device)
 
 
 # test if the model is working properly using random values
 decomposer.eval()
 
 sample = np.random.rand(1, SEQ_LEN, D_MODEL)
-output = torch.from_numpy(sample).float().to(initiate_model.device)
+output = torch.from_numpy(sample).float().to(bi_initiate_model.device)
 scores, output = decomposer(output)
 output = output.detach().cpu().numpy()
 scores = scores.detach().cpu().numpy()
 
-print(output.shape)
-print(scores.shape)
 
 
-test_data = initiate_model.df['2021-01-01':'2023-01-01'].values
+test_data = bi_initiate_model.df['2021-01-01':'2023-01-01'].values
 
 test_dataset = TimeSeriesDataset(test_data, seq_len=SEQ_LEN, step=SEQ_STEP)
 
@@ -250,37 +247,36 @@ test_dataloader = torch.utils.data.DataLoader(
     drop_last=False
 )
 
-print(test_data.shape)
 
-decomposer.load_state_dict(torch.load('transformer.pth'))  # load the trained model
 
-decomposer.eval()  # set model on test mode
+decomposer.load_state_dict(torch.load('bidirectional_transformer.pth', map_location=torch.device('cpu')))
+  # load the trained model
+
+decomposer.eval()  # set model on test mode1
 
 inputs, labels = [(inputs, labels) for _, (inputs, labels) in enumerate(test_dataloader)][0]  # fetch the test dataset
 
-print(inputs.shape)
-print(labels.shape)
 
 mydb.close()
 
-def forecast():
-    test_data = initiate_model.df[-180:].values
-    test_dates = initiate_model.df[-180:].index
+def bi_forecast():
+    test_data = bi_initiate_model.df[-180:].values
+    test_dates = bi_initiate_model.df[-180:].index
     test_dates = test_dates[60:240]
 
     x_test = test_data[:180]
     y_label = test_data[60:]
-    y_label = initiate_model.label_scaler.inverse_transform(y_label[:, :4])
+    y_label = bi_initiate_model.label_scaler.inverse_transform(y_label[:, :4])
 
     x_test = np.reshape(x_test, (1, x_test.shape[0], x_test.shape[1]))
 
     decomposer.eval()  # set model on test mode
 
-    x_test = torch.from_numpy(x_test).float().to(initiate_model.device)
+    x_test = torch.from_numpy(x_test).float().to(bi_initiate_model.device)
     attn_scores, y_test = decomposer(x_test)  # make forecast
     y_test = y_test.detach().cpu().numpy()
     y_test = np.reshape(y_test, (y_test.shape[1], y_test.shape[2]))
-    y_test = initiate_model.label_scaler.inverse_transform(y_test[:, :4])
+    y_test = bi_initiate_model.label_scaler.inverse_transform(y_test[:, :4])
 
 
     time_steps_per_day = 4  # Assuming 4 time steps per day (6 hours per time step)
@@ -288,7 +284,7 @@ def forecast():
     
     mydb._open_connection()
     cursor = mydb.cursor()
-    cursor.execute("SELECT DateTime FROM rivercast.rivercast_waterlevel_prediction order by DateTime DESC LIMIT 1")
+    cursor.execute("SELECT DateTime FROM rivercast.bidirectional_waterlevel_prediction order by DateTime DESC LIMIT 1")
     lastPredDT = cursor.fetchone()[0]
     formatted_lastPredDT = lastPredDT.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -304,7 +300,7 @@ def forecast():
 
 
 
-    cursor.execute("SELECT DateTime FROM rivercast.rivercast_waterlevel_obs order by DateTime DESC LIMIT 1")
+    cursor.execute("SELECT DateTime FROM rivercast.bidirectional_waterlevel_obs order by DateTime DESC LIMIT 1")
     lastTrueDT = cursor.fetchone()[0] + timedelta(hours=6)
 
     # Extract the forecast for the next 15 days
@@ -314,41 +310,35 @@ def forecast():
     true_df = pd.DataFrame(data=true_values ,columns=['T.Waterlevel', 'T.Waterlevel-1', 'T.Waterlevel-2', 'T.Waterlevel-3']) #converting numpy to dataframe
     true_df.insert(0, "DateTime", true_dates) #adding DateTime column
 
-    puirpose = pd.DataFrame(data=y_label ,columns=['T.Waterlevel', 'T.Waterlevel-1', 'T.Waterlevel-2', 'T.Waterlevel-3'])
-
     formatted_lastTrueDT = lastTrueDT.strftime('%Y-%m-%d %H:%M:%S')
 
     mydb.close()
 
     matches_and_following_rows = true_df[true_df['DateTime'] >= formatted_lastTrueDT]
 
-    print(matches_and_following_rows_pred[1:2])
-
-    print(matches_and_following_rows)
 
     return matches_and_following_rows_pred[1:2], matches_and_following_rows
 
-forecast()
 
 
-def getAttnScores():
-    test_data = initiate_model.reduced_df['2023-09-27':].values
-    test_dates = initiate_model.reduced_df['2023-09-27':].index
+def bi_getAttnScores():
+    test_data = bi_initiate_model.reduced_df['2023-09-27':].values
+    test_dates = bi_initiate_model.reduced_df['2023-09-27':].index
     test_dates = test_dates[60:240]
 
     x_test = test_data[:180]
     y_label = test_data[60:180]
-    y_label = initiate_model.label_scaler.inverse_transform(y_label[:, :4])
+    y_label = bi_initiate_model.label_scaler.inverse_transform(y_label[:, :4])
 
     x_test = np.reshape(x_test, (1, x_test.shape[0], x_test.shape[1]))
 
     decomposer.eval()  # set model on test mode
 
-    x_test = torch.from_numpy(x_test).float().to(initiate_model.device)
+    x_test = torch.from_numpy(x_test).float().to(bi_initiate_model.device)
     attn_scores, y_test = decomposer(x_test)  # make forecast
     y_test = y_test.detach().cpu().numpy()
     y_test = np.reshape(y_test, (y_test.shape[1], y_test.shape[2]))
-    y_test = initiate_model.label_scaler.inverse_transform(y_test[:, :4])
+    y_test = bi_initiate_model.label_scaler.inverse_transform(y_test[:, :4])
 
         # plot predictions
     for i in [0, 1, 2, 3]:
