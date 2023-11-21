@@ -27,180 +27,187 @@ database= "rivercast"
 )
 
 class initiate_model():
-    #IMPORTING
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # configure GPU    utilization
-    device
 
-    mydb._open_connection()
-    query = "SELECT * FROM rivercast.modelData;"
-    result_dataFrame = pd.read_sql(query, mydb)
+    def __init__(self):
+        self.initialize_model()
 
+    def initialize_model(self):
 
-    # Specify the column to exclude (change 'column_to_exclude' to the actual column name)
-    column_to_exclude = 'Date_Time'
+        #IMPORTING
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # configure GPU    utilization
 
-    # Exclude the specified column
-    df = result_dataFrame.drop(column_to_exclude, axis=1, errors='ignore')
-
-    # Print the DataFrame without the excluded column
-
-    # Now 'df' can be used as 'mainDataToDB' or for further processing
-
-    # convert month name to integer
-
-    # create datetime column
-    df[['Year', 'Month', 'Day', 'Hour']] = df[['Year', 'Month', 'Day', 'Hour']].astype(int)
-    df['Hour'] = df['Hour'].apply(lambda x: x if x < 24 else 0)
-
-    # convert year, month, day, and hour columns into timestamp
-    df['Datetime'] = df[['Year', 'Month', 'Day', 'Hour']].apply(lambda row: datetime(row['Year'], row['Month'], row['Day'], row['Hour']).isoformat(), axis=1)
-    df["Datetime"] = pd.to_datetime(df["Datetime"], format='ISO8601')
-
-    # assign timestamps as the data frame index
-    df.index = df["Datetime"]
-    df = df.drop(['Datetime'], axis=1)
-
-    # select the parameters
-    df = df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3', 'RF-Intensity', 'RF-Intensity.1', 'RF-Intensity.2', 'RF-Intensity.3', 'Precipitation', 'Precipitation.1', 'Precipitation.2', 'Humidity', 'Humidity.1', 'Humidity.2', 'Temperature', 'Temperature.1', 'Temperature.2']] 
-    df = df.astype(np.float64)  # convert parameters into a double precision floating number
-
-    # fill in missing values using linear interpolation
-    df = df.interpolate(method='linear', limit_direction='forward')
-    df = df.resample('6H').max()  # resample dataset using the max value for each 24-hours
-    df = df.rolling(120).mean().dropna()  # perform moving average smoothing
+        mydb._open_connection()
+        query = "SELECT * FROM rivercast.modelData;"
+        result_dataFrame = pd.read_sql(query, mydb)
 
 
-    rawData = df
+        # Specify the column to exclude (change 'column_to_exclude' to the actual column name)
+        column_to_exclude = 'Date_Time'
 
-    # scale data
-    scaler = MinMaxScaler()
-    scaler.fit(df)
-    # train label scaler
-    label_scaler = MinMaxScaler()
-    label_scaler.fit(df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']])
+        # Exclude the specified column
+        df = result_dataFrame.drop(column_to_exclude, axis=1, errors='ignore')
 
-    scaled_ds = scaler.transform(df)
-    df = pd.DataFrame(scaled_ds, columns=df.columns, index=df.index)
+        # Print the DataFrame without the excluded column
 
-    #PCA AND EUCLIDEAN KERNEL
+        # Now 'df' can be used as 'mainDataToDB' or for further processing
 
-    # center data
-    rainfall_df = df[['RF-Intensity', 'RF-Intensity.1', 'RF-Intensity.2', 'RF-Intensity.3']]
+        # convert month name to integer
 
+        # create datetime column
+        df[['Year', 'Month', 'Day', 'Hour']] = df[['Year', 'Month', 'Day', 'Hour']].astype(int)
+        df['Hour'] = df['Hour'].apply(lambda x: x if x < 24 else 0)
 
-    # calculate pairwise squared Euclidean distances
-    sq_dists = sc.spatial.distance.pdist(rainfall_df.values.T, 'sqeuclidean')
+        # convert year, month, day, and hour columns into timestamp
+        df['Datetime'] = df[['Year', 'Month', 'Day', 'Hour']].apply(lambda row: datetime(row['Year'], row['Month'], row['Day'], row['Hour']).isoformat(), axis=1)
+        df["Datetime"] = pd.to_datetime(df["Datetime"], format='ISO8601')
 
-    # convert pairwise distances into a square matrix
-    mat_sq_dists = sc.spatial.distance.squareform(sq_dists)
+        # assign timestamps as the data frame index
+        df.index = df["Datetime"]
+        df = df.drop(['Datetime'], axis=1)
 
-    # compute the symmetric kernel matrix.
-    gamma = 1 / len(rainfall_df.columns)
-    K = np.exp(-gamma * mat_sq_dists)
+        # select the parameters
+        df = df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3', 'RF-Intensity', 'RF-Intensity.1', 'RF-Intensity.2', 'RF-Intensity.3', 'Precipitation', 'Precipitation.1', 'Precipitation.2', 'Humidity', 'Humidity.1', 'Humidity.2', 'Temperature', 'Temperature.1', 'Temperature.2']] 
+        df = df.astype(np.float64)  # convert parameters into a double precision floating number
 
-    # center the kernel matrix.
-    N = K.shape[0]
-    one_n = np.ones((N, N)) / N
-    K = K - one_n.dot(K) - K.dot(one_n) + one_n.dot(K).dot(one_n)
+        # fill in missing values using linear interpolation
+        df = df.interpolate(method='linear', limit_direction='forward')
+        df = df.resample('6H').max()  # resample dataset using the max value for each 24-hours
+        df = df.rolling(120).mean().dropna()  # perform moving average smoothing
 
-    # calculate eigenvectors and eigenvalues
-    eigenvalues, eigenvectors = np.linalg.eigh(K)
+        self.sampling = df
 
-    # calculate components
-    rainfall_df = np.matmul(rainfall_df, eigenvectors) 
-    rainfall_df = rainfall_df.iloc[:, 1]
+        self.rawData = df
 
-    # center data
-    precipitation_df = df[['Precipitation', 'Precipitation.1', 'Precipitation.2']]
+        # scale data
+        scaler = MinMaxScaler()
+        scaler.fit(df)
+        # train label scaler
+        self.label_scaler = MinMaxScaler()
+        self.label_scaler.fit(df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']])
 
+        scaled_ds = scaler.transform(df)
+        df = pd.DataFrame(scaled_ds, columns=df.columns, index=df.index)
 
-    # calculate pairwise squared Euclidean distances
-    sq_dists = sc.spatial.distance.pdist(precipitation_df.values.T, 'sqeuclidean')
+        #PCA AND EUCLIDEAN KERNEL
 
-    # convert pairwise distances into a square matrix
-    mat_sq_dists = sc.spatial.distance.squareform(sq_dists)
-
-    # compute the symmetric kernel matrix.
-    gamma = 1/len(precipitation_df.columns)
-    K = np.exp(-gamma * mat_sq_dists)
-
-    # center the kernel matrix.
-    N = K.shape[0]
-    one_n = np.ones((N, N)) / N
-    K = K - one_n.dot(K) - K.dot(one_n) + one_n.dot(K).dot(one_n)
-
-    # calculate eigenvectors and eigenvalues
-    eigenvalues, eigenvectors = np.linalg.eigh(K)
-
-    # calculate components
-    precipitation_df = np.matmul(precipitation_df, eigenvectors) 
-    precipitation_df = precipitation_df.iloc[:, 1]
-
-    # center data
-    humidity_df = df[['Humidity', 'Humidity.1', 'Humidity.2']]
+        # center data
+        rainfall_df = df[['RF-Intensity', 'RF-Intensity.1', 'RF-Intensity.2', 'RF-Intensity.3']]
 
 
+        # calculate pairwise squared Euclidean distances
+        sq_dists = sc.spatial.distance.pdist(rainfall_df.values.T, 'sqeuclidean')
 
-    # calculate pairwise squared Euclidean distances
-    sq_dists = sc.spatial.distance.pdist(humidity_df.values.T, 'sqeuclidean')
+        # convert pairwise distances into a square matrix
+        mat_sq_dists = sc.spatial.distance.squareform(sq_dists)
 
-    # convert pairwise distances into a square matrix
-    mat_sq_dists = sc.spatial.distance.squareform(sq_dists)
+        # compute the symmetric kernel matrix.
+        gamma = 1 / len(rainfall_df.columns)
+        K = np.exp(-gamma * mat_sq_dists)
 
-    # compute the symmetric kernel matrix.
-    gamma = 1/len(humidity_df.columns)
-    K = np.exp(-gamma * mat_sq_dists)
+        # center the kernel matrix.
+        N = K.shape[0]
+        one_n = np.ones((N, N)) / N
+        K = K - one_n.dot(K) - K.dot(one_n) + one_n.dot(K).dot(one_n)
 
-    # center the kernel matrix.
-    N = K.shape[0]
-    one_n = np.ones((N, N)) / N
-    K = K - one_n.dot(K) - K.dot(one_n) + one_n.dot(K).dot(one_n)
+        # calculate eigenvectors and eigenvalues
+        eigenvalues, eigenvectors = np.linalg.eigh(K)
 
-    # calculate eigenvectors and eigenvalues
-    eigenvalues, eigenvectors = np.linalg.eigh(K)
+        # calculate components
+        rainfall_df = np.matmul(rainfall_df, eigenvectors) 
+        rainfall_df = rainfall_df.iloc[:, 1]
 
-    # calculate components
-    humidity_df = np.matmul(humidity_df, eigenvectors) 
-    humidity_df = humidity_df.iloc[:, 1]
+        # center data
+        precipitation_df = df[['Precipitation', 'Precipitation.1', 'Precipitation.2']]
 
-    # center data
-    temp_df = df[['Temperature', 'Temperature.1', 'Temperature.2']]
+
+        # calculate pairwise squared Euclidean distances
+        sq_dists = sc.spatial.distance.pdist(precipitation_df.values.T, 'sqeuclidean')
+
+        # convert pairwise distances into a square matrix
+        mat_sq_dists = sc.spatial.distance.squareform(sq_dists)
+
+        # compute the symmetric kernel matrix.
+        gamma = 1/len(precipitation_df.columns)
+        K = np.exp(-gamma * mat_sq_dists)
+
+        # center the kernel matrix.
+        N = K.shape[0]
+        one_n = np.ones((N, N)) / N
+        K = K - one_n.dot(K) - K.dot(one_n) + one_n.dot(K).dot(one_n)
+
+        # calculate eigenvectors and eigenvalues
+        eigenvalues, eigenvectors = np.linalg.eigh(K)
+
+        # calculate components
+        precipitation_df = np.matmul(precipitation_df, eigenvectors) 
+        precipitation_df = precipitation_df.iloc[:, 1]
+
+        # center data
+        humidity_df = df[['Humidity', 'Humidity.1', 'Humidity.2']]
 
 
 
-    # calculate pairwise squared Euclidean distances
-    sq_dists = sc.spatial.distance.pdist(temp_df.values.T, 'sqeuclidean')
+        # calculate pairwise squared Euclidean distances
+        sq_dists = sc.spatial.distance.pdist(humidity_df.values.T, 'sqeuclidean')
 
-    # convert pairwise distances into a square matrix
-    mat_sq_dists = sc.spatial.distance.squareform(sq_dists)
+        # convert pairwise distances into a square matrix
+        mat_sq_dists = sc.spatial.distance.squareform(sq_dists)
 
-    # compute the symmetric kernel matrix.
-    gamma = 1/len(temp_df.columns)
-    K = np.exp(-gamma * mat_sq_dists)
+        # compute the symmetric kernel matrix.
+        gamma = 1/len(humidity_df.columns)
+        K = np.exp(-gamma * mat_sq_dists)
 
-    # center the kernel matrix.
-    N = K.shape[0]
-    one_n = np.ones((N, N)) / N
-    K = K - one_n.dot(K) - K.dot(one_n) + one_n.dot(K).dot(one_n)
+        # center the kernel matrix.
+        N = K.shape[0]
+        one_n = np.ones((N, N)) / N
+        K = K - one_n.dot(K) - K.dot(one_n) + one_n.dot(K).dot(one_n)
 
-    # calculate eigenvectors and eigenvalues
-    eigenvalues, eigenvectors = np.linalg.eigh(K)
+        # calculate eigenvectors and eigenvalues
+        eigenvalues, eigenvectors = np.linalg.eigh(K)
 
-    # calculate components
-    temp_df = np.matmul(temp_df, eigenvectors)
-    temp_df = temp_df.iloc[:, 1]
+        # calculate components
+        humidity_df = np.matmul(humidity_df, eigenvectors) 
+        humidity_df = humidity_df.iloc[:, 1]
 
-    weather_df = pd.concat([rainfall_df, precipitation_df, humidity_df, temp_df], axis=1)
-    weather_df.columns = ['Rainfall', 'Precipitation', 'Humidity', 'Temperature']
-
-    river_df = df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']]
-    reduced_df = pd.concat([river_df, weather_df], axis=1)
+        # center data
+        temp_df = df[['Temperature', 'Temperature.1', 'Temperature.2']]
 
 
 
+        # calculate pairwise squared Euclidean distances
+        sq_dists = sc.spatial.distance.pdist(temp_df.values.T, 'sqeuclidean')
 
-    cleanData = reduced_df
+        # convert pairwise distances into a square matrix
+        mat_sq_dists = sc.spatial.distance.squareform(sq_dists)
 
+        # compute the symmetric kernel matrix.
+        gamma = 1/len(temp_df.columns)
+        K = np.exp(-gamma * mat_sq_dists)
+
+        # center the kernel matrix.
+        N = K.shape[0]
+        one_n = np.ones((N, N)) / N
+        K = K - one_n.dot(K) - K.dot(one_n) + one_n.dot(K).dot(one_n)
+
+        # calculate eigenvectors and eigenvalues
+        eigenvalues, eigenvectors = np.linalg.eigh(K)
+
+        # calculate components
+        temp_df = np.matmul(temp_df, eigenvectors)
+        temp_df = temp_df.iloc[:, 1]
+
+        weather_df = pd.concat([rainfall_df, precipitation_df, humidity_df, temp_df], axis=1)
+        weather_df.columns = ['Rainfall', 'Precipitation', 'Humidity', 'Temperature']
+
+        river_df = df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']]
+        self.reduced_df = pd.concat([river_df, weather_df], axis=1)
+
+
+
+
+        self.cleanData = self.reduced_df
+
+initiate_model_instance = initiate_model()
 
 class TimeSeriesDataset(torch.utils.data.Dataset):
     def __init__(self, data, seq_len, step):
@@ -247,6 +254,7 @@ class MultiHeadAttention(nn.Module):
         self.W_o = nn.Linear(d_model, d_model)
         
     def scaled_dot_product_attention(self, Q, K, V, mask=None):
+        mask = mask.to(initiate_model_instance.device)
         attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
         attn_scores = attn_scores.masked_fill(mask == 0, -1e9)
             
@@ -329,7 +337,7 @@ class Transformer(nn.Module):
         return tgt_mask
 
     def forward(self, tgt):
-        mask = self.generate_mask(tgt).to(initiate_model.device)
+        mask = self.generate_mask(tgt).to()
         tgt_embedded = self.dropout(self.positional_encoding(tgt))
 
         dec_output = tgt_embedded
@@ -349,53 +357,60 @@ decomposer = Transformer(
     dropout=DROPOUT
 ).float()
 
-decomposer.to(initiate_model.device)
+test_data = initiate_model_instance.reduced_df['2021-01-01':'2023-01-01'].values
+
+test_dataset = TimeSeriesDataset(test_data, seq_len=SEQ_LEN, step=SEQ_STEP)
+
+test_dataloader = torch.utils.data.DataLoader(
+    test_dataset,
+    batch_size=len(test_data),
+    shuffle=False,
+    drop_last=False
+)
+
+decomposer.to(initiate_model_instance.device)
 
 decomposer.load_state_dict(torch.load('rivercast_transformer.pth'))
 
 decomposer.eval()  # set model on test mode
-
-mydb.close()
+inputs, labels = [(inputs, labels) for _, (inputs, labels) in enumerate(test_dataloader)][0]  # fetch the test dataset
 
 def forecast():
-    test_data = initiate_model.reduced_df[-180:].values
-    test_dates = initiate_model.reduced_df[-180:].index
-    test_dates = test_dates[60:240]
 
+    test_data = initiate_model_instance.reduced_df[-180:].values
+    test_dates = initiate_model_instance.reduced_df[-180:].index
+    test_dates = test_dates[60:240]    
     x_test = test_data[:180]
     y_label = test_data[60:]
-    y_label = initiate_model.label_scaler.inverse_transform(y_label[:, :4])
+    y_label = initiate_model_instance.label_scaler.inverse_transform(y_label[:, :4])
 
     x_test = np.reshape(x_test, (1, x_test.shape[0], x_test.shape[1]))
 
     decomposer.eval()  # set model on test mode
 
-    x_test = torch.from_numpy(x_test).float().to(initiate_model.device)
+    x_test = torch.from_numpy(x_test).float().to(initiate_model_instance.device)
     attn_scores, y_test = decomposer(x_test)  # make forecast
     y_test = y_test.detach().cpu().numpy()
     y_test = np.reshape(y_test, (y_test.shape[1], y_test.shape[2]))
-    y_test = initiate_model.label_scaler.inverse_transform(y_test[:, :4])
-
+    y_test = initiate_model_instance.label_scaler.inverse_transform(y_test[:, :4])
 
     time_steps_per_day = 4  # Assuming 4 time steps per day (6 hours per time step)
     forecast_days = 15
     
-    mydb._open_connection()
     cursor = mydb.cursor()
     cursor.execute("SELECT DateTime FROM rivercast.rivercast_waterlevel_prediction order by DateTime DESC LIMIT 1")
     lastPredDT = cursor.fetchone()[0]
     formatted_lastPredDT = lastPredDT.strftime('%Y-%m-%d %H:%M:%S')
-
     # Extract the forecast for the next 15 days
-    forecast_values = y_test[:forecast_days * time_steps_per_day]
+    forecast_values = y_test[:]
 
     # Create a DataFrame with the forecasted values and dates
-    forecast_dates = pd.date_range(test_dates[-1], periods=forecast_days * time_steps_per_day + 1, freq='6H')[1:]
+    forecast_dates = pd.date_range(test_dates[-120], periods=180, freq='6H')[:] # the -120 selects the oldest date as the start date, then match the size of y_test in the periods.
     forecast_df = pd.DataFrame(data=forecast_values, columns=['P.Waterlevel', 'P.Waterlevel-1', 'P.Waterlevel-2', 'P.Waterlevel-3'])
     forecast_df.insert(0, "DateTime", forecast_dates)
 
-    matches_and_following_rows_pred = forecast_df[forecast_df['DateTime'] >= formatted_lastPredDT]
-
+    matches_and_following_rows_pred = forecast_df[forecast_df['DateTime'] >= formatted_lastPredDT] # then match the last datetime predicted to dynamically adjust the predicted values in the database
+    
 
 
     cursor.execute("SELECT DateTime FROM rivercast.rivercast_waterlevel_obs order by DateTime DESC LIMIT 1")
@@ -408,18 +423,49 @@ def forecast():
     true_df = pd.DataFrame(data=true_values ,columns=['T.Waterlevel', 'T.Waterlevel-1', 'T.Waterlevel-2', 'T.Waterlevel-3']) #converting numpy to dataframe
     true_df.insert(0, "DateTime", true_dates) #adding DateTime column
 
-    puirpose = pd.DataFrame(data=y_label ,columns=['T.Waterlevel', 'T.Waterlevel-1', 'T.Waterlevel-2', 'T.Waterlevel-3'])
 
     formatted_lastTrueDT = lastTrueDT.strftime('%Y-%m-%d %H:%M:%S')
-
-    mydb.close()
 
     matches_and_following_rows = true_df[true_df['DateTime'] >= formatted_lastTrueDT]
 
     return matches_and_following_rows_pred[1:2], matches_and_following_rows
 
+def getRiverCastMAE():
+    # measure accuracy of each window
+    accuracy = []
+    predictions = []
+    date_times = []
+    for i in range(len(inputs)):
+        x_test = inputs[i:(i+1)].float().to(initiate_model_instance.device)
 
+        attn_scores, y_test = decomposer(x_test)  # make forecast
+        y_test = torch.squeeze(y_test, dim=0)
+        y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
+        y_test = initiate_model_instance.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
+        y_test = y_test[-SEQ_STEP:]  # get only the forecast window
 
+        # evaluate model accuracy
+        ground = torch.squeeze(labels[i:(i+1)], dim=0)  # get observed values
+        ground = ground.numpy()
+        ground = initiate_model_instance.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
+        ground = ground[-SEQ_STEP:]  # get only the forecast window
+
+        accuracy.append(mean_absolute_error(ground, y_test))  # collect mean absolute error of each window
+        predictions.append(np.concatenate((y_test[0], ground[0])))  # collect first element of output
+        date_times.append(initiate_model_instance.rawData.index[i + len(initiate_model_instance.rawData) - len(accuracy)])  # get corresponding DateTime
+
+        
+    accuracy_df = pd.DataFrame(np.array(accuracy), columns=['MAE'])
+    predictions_df = pd.DataFrame(np.array(predictions), columns=['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3', 'T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3'])
+    metric_df = pd.concat([accuracy_df, predictions_df], axis=1)
+    metric_df.index = initiate_model_instance.sampling.index[-len(metric_df):]
+
+    metric_df = metric_df.resample('24H').max()
+    metric_df.to_csv('results.csv')  # save test results
+    
+    pass_metric = pd.read_csv('results.csv')
+    print(pass_metric.tail(10))
+    return pass_metric
 
 def getLatest_Datetime():
     mydb._open_connection()
@@ -434,6 +480,8 @@ def getLatest_Datetime():
 
 
 def updateMainData():
+    initiate_model_instance = initiate_model()
+    initiate_model_instance.initialize_model()
 
     getLatest_Datetime()
     lastDTindexDef = getLatest_Datetime()
@@ -680,36 +728,30 @@ def updateMainData():
 
     # Save to CSV
     merged_df.to_csv('consolidated_data.csv', index=False)
-    mydb.close()
 
     return merged_df, updatedData
 
 
 
 
-def getAttnScores():
-    test_data = initiate_model.reduced_df['2023-09-27':].values
-    test_dates = initiate_model.reduced_df['2023-09-27':].index
-    test_dates = test_dates[60:240]
+def getAttnScores(window=240, kernel_size=15):
+    x_test = inputs[window:(window+1)].float().to(initiate_model_instance.device)
 
-    x_test = test_data[:180]
-    y_label = test_data[60:180]
-    y_label = initiate_model.label_scaler.inverse_transform(y_label[:, :4])
-
-    x_test = np.reshape(x_test, (1, x_test.shape[0], x_test.shape[1]))
-
-    decomposer.eval()  # set model on test mode
-
-    x_test = torch.from_numpy(x_test).float().to(initiate_model.device)
     attn_scores, y_test = decomposer(x_test)  # make forecast
-    y_test = y_test.detach().cpu().numpy()
-    y_test = np.reshape(y_test, (y_test.shape[1], y_test.shape[2]))
-    y_test = initiate_model.label_scaler.inverse_transform(y_test[:, :4])
+    y_test = torch.squeeze(y_test, dim=0)
+    y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
+    y_test = initiate_model_instance.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
+    y_test = y_test[-SEQ_STEP:]  # get only the forecast window
+
+    ground = torch.squeeze(labels[window:(window+1)], dim=0)  # get observed values
+    ground = ground.numpy()
+    ground = initiate_model_instance.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
+    ground = ground[-SEQ_STEP:]  # get only the forecast window
 
         # plot predictions
     for i in [0, 1, 2, 3]:
         plt.plot(np.convolve(y_test[:, i], np.ones(30), 'valid') / 30)
-        plt.plot(y_label[30:, i], color='k', alpha=0.3)
+        plt.plot(ground[30:, i], color='k', alpha=0.3)
         plt.show()
 
     # plot attention scores
@@ -721,7 +763,7 @@ def getAttnScores():
 
     for idx, attention in enumerate(attn_scores):
         selected_attention = attention[10:]
-        selected_attention = block_reduce(selected_attention, (15, 15), np.max)
+        selected_attention = block_reduce(selected_attention, (kernel_size, kernel_size), np.max)
 
         fig, ax = plt.subplots()
         ax.matshow(selected_attention, cmap='viridis')

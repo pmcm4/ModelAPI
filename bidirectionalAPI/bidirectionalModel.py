@@ -27,60 +27,67 @@ database= "rivercast"
 )
 
 class bi_initiate_model():
-    #IMPORTING
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # configure GPU    utilization
-    device
+    def __init__(self):
+        self.initialize_model()
 
-    mydb._open_connection()
-    query = "SELECT * FROM rivercast.modelData;"
-    result_dataFrame = pd.read_sql(query, mydb)
+    def initialize_model(self):
+        #IMPORTING
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # configure GPU    utilization
 
+        mydb._open_connection()
+        query = "SELECT * FROM rivercast.modelData;"
+        result_dataFrame = pd.read_sql(query, mydb)
+        
 
-    # Specify the column to exclude (change 'column_to_exclude' to the actual column name)
-    column_to_exclude = ['Date_Time', 'RF-Intensity.1']
+        # Specify the column to exclude (change 'column_to_exclude' to the actual column name)
+        column_to_exclude = ['Date_Time', 'RF-Intensity.1']
 
-    # Exclude the specified column
-    df = result_dataFrame.drop(column_to_exclude, axis=1, errors='ignore')
+        # Exclude the specified column
+        df = result_dataFrame.drop(column_to_exclude, axis=1, errors='ignore')
+        self.rawData = df
+        
 
+        # Now 'df' can be used as 'mainDataToDB' or for further processing
 
+        # convert month name to integer
 
-    # Now 'df' can be used as 'mainDataToDB' or for further processing
+        # create datetime column
+        df[['Year', 'Month', 'Day', 'Hour']] = df[['Year', 'Month', 'Day', 'Hour']].astype(int)
+        df['Hour'] = df['Hour'].apply(lambda x: x if x < 24 else 0)
 
-    # convert month name to integer
+        # convert year, month, day, and hour columns into timestamp
+        df['Datetime'] = df[['Year', 'Month', 'Day', 'Hour']].apply(lambda row: datetime(row['Year'], row['Month'], row['Day'], row['Hour']).isoformat(), axis=1)
+        df["Datetime"] = pd.to_datetime(df["Datetime"], format='ISO8601')
 
-    # create datetime column
-    df[['Year', 'Month', 'Day', 'Hour']] = df[['Year', 'Month', 'Day', 'Hour']].astype(int)
-    df['Hour'] = df['Hour'].apply(lambda x: x if x < 24 else 0)
+        # assign timestamps as the data frame index
+        df.index = df["Datetime"]
+        df = df.drop(['Datetime'], axis=1)
 
-    # convert year, month, day, and hour columns into timestamp
-    df['Datetime'] = df[['Year', 'Month', 'Day', 'Hour']].apply(lambda row: datetime(row['Year'], row['Month'], row['Day'], row['Hour']).isoformat(), axis=1)
-    df["Datetime"] = pd.to_datetime(df["Datetime"], format='ISO8601')
+        # select the parameters
+        df = df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3', 'RF-Intensity', 'RF-Intensity.2', 'RF-Intensity.3', 'Precipitation', 'Precipitation.1', 'Precipitation.2', 'Humidity', 'Humidity.1', 'Humidity.2', 'Temperature', 'Temperature.1', 'Temperature.2']] 
+        df = df.astype(np.float64)  # convert parameters into a double precision floating number
+        
+        # fill in missing values using linear interpolation
+        df = df.interpolate(method='linear', limit_direction='forward')
+        df = df.resample('6H').max()  # resample dataset using the max value for each 24-hours
+        df = df.rolling(120).mean().dropna()  # perform moving average smoothing
+        
 
-    # assign timestamps as the data frame index
-    df.index = df["Datetime"]
-    df = df.drop(['Datetime'], axis=1)
+        
 
-    # select the parameters
-    df = df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3', 'RF-Intensity', 'RF-Intensity.2', 'RF-Intensity.3', 'Precipitation', 'Precipitation.1', 'Precipitation.2', 'Humidity', 'Humidity.1', 'Humidity.2', 'Temperature', 'Temperature.1', 'Temperature.2']] 
-    df = df.astype(np.float64)  # convert parameters into a double precision floating number
+        # scale data
+        scaler = MinMaxScaler()
+        scaler.fit(df)
+        # train label scaler
+        self.label_scaler = MinMaxScaler()
+        self.label_scaler.fit(df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']])
 
-    # fill in missing values using linear interpolation
-    df = df.interpolate(method='linear', limit_direction='forward')
-    df = df.resample('6H').max()  # resample dataset using the max value for each 24-hours
-    df = df.rolling(120).mean().dropna()  # perform moving average smoothing
+        scaled_ds = scaler.transform(df)
+        self.df = pd.DataFrame(scaled_ds, columns=df.columns, index=df.index)
 
+        self.cleanData = self.df
 
-    rawData = df
-
-    # scale data
-    scaler = MinMaxScaler()
-    scaler.fit(df)
-    # train label scaler
-    label_scaler = MinMaxScaler()
-    label_scaler.fit(df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']])
-
-    scaled_ds = scaler.transform(df)
-    df = pd.DataFrame(scaled_ds, columns=df.columns, index=df.index)
+initiate_model_instance_bi = bi_initiate_model()
 
 class TimeSeriesDataset(torch.utils.data.Dataset):
     def __init__(self, data, seq_len, step):
@@ -103,7 +110,7 @@ class TimeSeriesDataset(torch.utils.data.Dataset):
         return len(self.data) - (self.seq_len + self.step) + 1
     
 BATCH_SIZE = 128
-SEQ_LEN = 60
+SEQ_LEN = 180
 SEQ_STEP = 60
 PRED_SIZE = 4
 D_MODEL = 16
@@ -222,21 +229,21 @@ decomposer = Transformer(
     dropout=DROPOUT
 ).float()
 
-decomposer.to(bi_initiate_model.device)
+decomposer.to(initiate_model_instance_bi.device)
 
 
 # test if the model is working properly using random values
 decomposer.eval()
 
 sample = np.random.rand(1, SEQ_LEN, D_MODEL)
-output = torch.from_numpy(sample).float().to(bi_initiate_model.device)
+output = torch.from_numpy(sample).float().to(initiate_model_instance_bi.device)
 scores, output = decomposer(output)
 output = output.detach().cpu().numpy()
 scores = scores.detach().cpu().numpy()
 
 
 
-test_data = bi_initiate_model.df['2021-01-01':'2023-01-01'].values
+test_data = initiate_model_instance_bi.df['2021-01-01':'2023-01-01'].values
 
 test_dataset = TimeSeriesDataset(test_data, seq_len=SEQ_LEN, step=SEQ_STEP)
 
@@ -249,6 +256,7 @@ test_dataloader = torch.utils.data.DataLoader(
 
 
 
+
 decomposer.load_state_dict(torch.load('bidirectional_transformer.pth', map_location=torch.device('cpu')))
   # load the trained model
 
@@ -257,26 +265,24 @@ decomposer.eval()  # set model on test mode1
 inputs, labels = [(inputs, labels) for _, (inputs, labels) in enumerate(test_dataloader)][0]  # fetch the test dataset
 
 
-mydb.close()
-
 def bi_forecast():
-    test_data = bi_initiate_model.df[-180:].values
-    test_dates = bi_initiate_model.df[-180:].index
+    test_data = initiate_model_instance_bi.df[-180:].values
+    test_dates = initiate_model_instance_bi.df[-180:].index
     test_dates = test_dates[60:240]
 
     x_test = test_data[:180]
     y_label = test_data[60:]
-    y_label = bi_initiate_model.label_scaler.inverse_transform(y_label[:, :4])
+    y_label = initiate_model_instance_bi.label_scaler.inverse_transform(y_label[:, :4])
 
     x_test = np.reshape(x_test, (1, x_test.shape[0], x_test.shape[1]))
 
     decomposer.eval()  # set model on test mode
 
-    x_test = torch.from_numpy(x_test).float().to(bi_initiate_model.device)
+    x_test = torch.from_numpy(x_test).float().to(initiate_model_instance_bi.device)
     attn_scores, y_test = decomposer(x_test)  # make forecast
     y_test = y_test.detach().cpu().numpy()
     y_test = np.reshape(y_test, (y_test.shape[1], y_test.shape[2]))
-    y_test = bi_initiate_model.label_scaler.inverse_transform(y_test[:, :4])
+    y_test = initiate_model_instance_bi.label_scaler.inverse_transform(y_test[:, :4])
 
 
     time_steps_per_day = 4  # Assuming 4 time steps per day (6 hours per time step)
@@ -289,10 +295,10 @@ def bi_forecast():
     formatted_lastPredDT = lastPredDT.strftime('%Y-%m-%d %H:%M:%S')
 
     # Extract the forecast for the next 15 days
-    forecast_values = y_test[:forecast_days * time_steps_per_day]
+    forecast_values = y_test[:]
 
     # Create a DataFrame with the forecasted values and dates
-    forecast_dates = pd.date_range(test_dates[-1], periods=forecast_days * time_steps_per_day + 1, freq='6H')[1:]
+    forecast_dates = pd.date_range(test_dates[-120], periods=180, freq='6H')[:]
     forecast_df = pd.DataFrame(data=forecast_values, columns=['P.Waterlevel', 'P.Waterlevel-1', 'P.Waterlevel-2', 'P.Waterlevel-3'])
     forecast_df.insert(0, "DateTime", forecast_dates)
 
@@ -321,29 +327,25 @@ def bi_forecast():
 
 
 
-def bi_getAttnScores():
-    test_data = bi_initiate_model.reduced_df['2023-09-27':].values
-    test_dates = bi_initiate_model.reduced_df['2023-09-27':].index
-    test_dates = test_dates[60:240]
+def bi_getAttnScores(window=800, kernel_size=9):
+    x_test = inputs[window:(window+1)].float().to(initiate_model_instance_bi.device)
+    indexes = initiate_model_instance_bi.df.index[-1460:]
 
-    x_test = test_data[:180]
-    y_label = test_data[60:180]
-    y_label = bi_initiate_model.label_scaler.inverse_transform(y_label[:, :4])
-
-    x_test = np.reshape(x_test, (1, x_test.shape[0], x_test.shape[1]))
-
-    decomposer.eval()  # set model on test mode
-
-    x_test = torch.from_numpy(x_test).float().to(bi_initiate_model.device)
     attn_scores, y_test = decomposer(x_test)  # make forecast
-    y_test = y_test.detach().cpu().numpy()
-    y_test = np.reshape(y_test, (y_test.shape[1], y_test.shape[2]))
-    y_test = bi_initiate_model.label_scaler.inverse_transform(y_test[:, :4])
+    y_test = torch.squeeze(y_test, dim=0)
+    y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
+    y_test = initiate_model_instance_bi.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
+    y_test = y_test[-(SEQ_STEP * 2):]  # get only the forecast window
+
+    ground = torch.squeeze(labels[window:(window+1)], dim=0)  # get observed values
+    ground = ground.numpy()
+    ground = initiate_model_instance_bi.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
+    ground = ground[-(SEQ_STEP * 2):]  # get only the forecast window
 
         # plot predictions
     for i in [0, 1, 2, 3]:
         plt.plot(np.convolve(y_test[:, i], np.ones(30), 'valid') / 30)
-        plt.plot(y_label[30:, i], color='k', alpha=0.3)
+        plt.plot(ground[30:, i], color='k', alpha=0.3)
         plt.show()
 
     # plot attention scores
@@ -355,7 +357,7 @@ def bi_getAttnScores():
 
     for idx, attention in enumerate(attn_scores):
         selected_attention = attention[10:]
-        selected_attention = block_reduce(selected_attention, (15, 15), np.max)
+        selected_attention = block_reduce(selected_attention, (kernel_size, kernel_size), np.max)
 
         fig, ax = plt.subplots()
         ax.matshow(selected_attention, cmap='viridis')
@@ -370,3 +372,41 @@ def bi_getAttnScores():
 
     # Return the list of attention score images
     return attention_score_images
+
+
+def getBidirectionalMAE():
+    # measure accuracy of each window
+    accuracy = []
+    predictions = []
+    date_times = []
+    for i in range(len(inputs)):
+        x_test = inputs[i:(i+1)].float().to(initiate_model_instance_bi.device)
+
+        attn_scores, y_test = decomposer(x_test)  # make forecast
+        y_test = torch.squeeze(y_test, dim=0)
+        y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
+        y_test = initiate_model_instance_bi.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
+        
+
+        # evaluate model accuracy
+        ground = torch.squeeze(labels[i:(i+1)], dim=0)  # get observed values
+        ground = ground.numpy()
+        ground = initiate_model_instance_bi.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
+        
+
+        accuracy.append(mean_absolute_error(ground, y_test))  # collect mean absolute error of each window
+        predictions.append(np.concatenate((y_test[0], ground[0])))  # collect first element of output
+        date_times.append(initiate_model_instance_bi.df.index[i + len(initiate_model_instance_bi.df) - len(accuracy)])  # get corresponding DateTime
+
+        
+    accuracy_df = pd.DataFrame(np.array(accuracy), columns=['MAE'])
+    predictions_df = pd.DataFrame(np.array(predictions), columns=['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3', 'T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3'])
+    metric_df = pd.concat([accuracy_df, predictions_df], axis=1)
+    metric_df.index = initiate_model_instance_bi.df.index[-len(metric_df):]
+
+    metric_df = metric_df.resample('24H').max()
+    metric_df.to_csv('results_bi.csv')  # save test results
+    
+    pass_metric = pd.read_csv('results_bi.csv')
+    print(pass_metric.tail(10))
+    return pass_metric
