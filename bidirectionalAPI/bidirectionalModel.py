@@ -408,5 +408,23 @@ def getBidirectionalMAE():
     metric_df.to_csv('results_bi.csv')  # save test results
     
     pass_metric = pd.read_csv('results_bi.csv')
-    print(pass_metric.tail(10))
-    return pass_metric
+    
+
+    a_MAEs = []
+    t_MAEs = []
+
+    aMAE = metric_df['MAE'].mean()
+    a_MAEs.append(aMAE)
+
+    tMae = mean_absolute_error(metric_df[['T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3']], metric_df[['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3']])
+    t_MAEs.append(tMae)
+    
+    aveMAE = pd.DataFrame(np.array(a_MAEs), columns = ['aMAE'])
+    tMAE = pd.DataFrame(np.array(t_MAEs), columns = ['tMAE'])
+
+    pass_MAEs = pd.concat([aveMAE, tMAE], axis=1)
+
+    pass_MAEs['cnt'] = pass_MAEs.index
+
+
+    return pass_metric, pass_MAEs

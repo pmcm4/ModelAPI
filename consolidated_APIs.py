@@ -14,8 +14,8 @@ import mysql.connector
 from sqlalchemy import create_engine, inspect, DateTime
 from PIL import Image
 from flask_cors import CORS  # Import CORS from flask_cors
-
-
+import pandas as pd
+from sqlalchemy.exc import NoSuchTableError
 
 
 app = Flask(__name__)
@@ -135,17 +135,40 @@ def rc_addTrueValues():
 
 @app.route('/getrivercastMAE', methods=['GET'])
 def rc_addMAE():
-    
     # Call forecast function
-    df2 = getRiverCastMAE()
+    df2 = getRiverCastMAE()[0]
 
     # Assuming 'date_time' is the column name in your DataFrame
     df2.set_index('Datetime', inplace=True)
 
-    # Use 'DateTime' as the index label in the database
-    df2.to_sql(name='rivercast_df_with_MAE', con=engine, index=True, index_label='Datetime', if_exists='append', method='multi')
+    # Use 'DateTime' as the index label in the database with a specified key length
+    df2.to_sql(
+        name='rivercast_df_with_MAE',
+        con=engine,
+        index=True,
+        index_label='Datetime',
+        if_exists='replace',
+        method='multi',
+        dtype={'Datetime': DateTime(50)}  # Specify the key length as needed
+    )
 
-    return jsonify("Add MAE to DB initiated")
+        # Call forecast function
+    df3 = getRiverCastMAE()[1]
+
+    # Assuming 'date_time' is the column name in your DataFrame
+    df3.set_index('cnt', inplace=True)
+
+    # Use 'DateTime' as the index label in the database with a specified key length
+    df3.to_sql(
+        name='rivercast_overall_MAEs',
+        con=engine,
+        index=True,
+        index_label='cnt',
+        if_exists='replace',
+        method='multi',
+    )
+
+    return jsonify("Add RC MAE to DB initiated")
 
 @app.route('/updateModelData', methods=['GET'])
 def updateModelData():
@@ -242,9 +265,8 @@ def bi_addTrueValues():
 
 @app.route('/getBidirectionalMAE', methods=['GET'])
 def bi_addMAE():
-    
     # Call forecast function
-    df2 = getBidirectionalMAE()
+    df2 = getBidirectionalMAE()[0]
 
     # Assuming 'date_time' is the column name in your DataFrame
     df2.set_index('Datetime', inplace=True)
@@ -255,12 +277,28 @@ def bi_addMAE():
         con=engine,
         index=True,
         index_label='Datetime',
-        if_exists='append',
+        if_exists='replace',
         method='multi',
         dtype={'Datetime': DateTime(50)}  # Specify the key length as needed
     )
 
-    return jsonify("Add MAE to DB initiated")
+        # Call forecast function
+    df3 = getBidirectionalMAE()[1]
+
+    # Assuming 'date_time' is the column name in your DataFrame
+    df3.set_index('cnt', inplace=True)
+
+    # Use 'DateTime' as the index label in the database with a specified key length
+    df3.to_sql(
+        name='bidirectional_overall_MAEs',
+        con=engine,
+        index=True,
+        index_label='cnt',
+        if_exists='replace',
+        method='multi',
+    )
+
+    return jsonify("Add Bi MAE to DB initiated")
 
 
 if __name__ == '__main__':
