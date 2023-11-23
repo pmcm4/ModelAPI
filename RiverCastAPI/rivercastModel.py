@@ -485,6 +485,55 @@ def getRiverCastMAE():
 
     return pass_metric, pass_MAEs
 
+def getForecastforDateRangeFunction():
+    test_data = initiate_model_instance.reduced_df['2012-01-01':].values
+
+    test_dataset = TimeSeriesDataset(test_data, seq_len=SEQ_LEN, step=SEQ_STEP)
+
+    test_dataloader = torch.utils.data.DataLoader(
+        test_dataset,
+        batch_size=len(test_data),
+        shuffle=False,
+        drop_last=False
+    )
+
+    decomposer.load_state_dict(torch.load('rivercast_transformer.pth'))  # load the trained model
+
+    decomposer.eval()  # set model on test mode
+
+    inputs, labels = [(inputs, labels) for _, (inputs, labels) in enumerate(test_dataloader)][0]  # fetch the test dataset
+
+    # measure accuracy of each window
+    accuracy = []
+    predictions = []
+    for i in range(len(inputs)):
+        x_test = inputs[i:(i+1)].float().to(initiate_model_instance.device)
+
+        attn_scores, y_test = decomposer(x_test)  # make forecast
+        y_test = torch.squeeze(y_test, dim=0)
+        y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
+        y_test = initiate_model_instance.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
+
+        # evaluate model accuracy
+        ground = torch.squeeze(labels[i:(i+1)], dim=0)  # get observed values
+        ground = ground.numpy()
+        ground = initiate_model_instance.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
+
+        accuracy.append(mean_absolute_error(ground, y_test))  # collect mean absolute error of each window
+        predictions.append(np.concatenate((y_test[0], ground[0])))  # collect first element of output
+        
+    accuracy_df = pd.DataFrame(np.array(accuracy), columns=['MAE'])
+    predictions_df = pd.DataFrame(np.array(predictions), columns=['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3', 'T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3'])
+    metric_df = pd.concat([accuracy_df, predictions_df], axis=1)
+    metric_df.index = initiate_model_instance.rawData.index[-len(metric_df):]
+
+    metric_df.to_csv('rivercast_date_range.csv')  # save test results
+
+    pass_metric_df = pd.read_csv('rivercast_date_range.csv')
+
+    return pass_metric_df
+
+
 
 def getLatest_Datetime():
     mydb._open_connection()

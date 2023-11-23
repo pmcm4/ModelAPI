@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, send_file
 import io
-from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, getAttnScores, updateMainData, getRiverCastMAE
-from bidirectionalAPI.bidirectionalModel import initiate_model_instance_bi, bi_getAttnScores, bi_forecast, getBidirectionalMAE
+from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, getAttnScores, updateMainData, getRiverCastMAE, getForecastforDateRangeFunction
+from bidirectionalAPI.bidirectionalModel import initiate_model_instance_bi, bi_getAttnScores, bi_forecast, getBidirectionalMAE, getForecastforDateRangeFunction_bi
 import matplotlib
 matplotlib.use('Agg')  # Use a non-GUI backend
 import matplotlib.pyplot as plt
@@ -18,8 +18,9 @@ import pandas as pd
 from sqlalchemy.exc import NoSuchTableError
 
 
+
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app, supports_credentials=True)
 
 
 mydb = mysql.connector.connect(
@@ -193,6 +194,17 @@ def updateModelData():
     else:
         return jsonify("Data are up-to-date")
 
+
+@app.route('/rc_updateDateRangeData', methods=['GET'])
+def rc_updateDRdata():
+    df = getForecastforDateRangeFunction()
+
+    df.set_index('Datetime', inplace=True)
+    df.to_sql(name='rivercast_daterange_data', con=engine, index=True, index_label='Datetime', if_exists='replace', method='multi', dtype={'Datetime': DateTime(50)})
+
+    return jsonify("DateRange Data Updated")
+
+
 # BIDIRECTIONAL APIs
 
 # Endpoint for raw data plot
@@ -300,6 +312,14 @@ def bi_addMAE():
 
     return jsonify("Add Bi MAE to DB initiated")
 
+@app.route('/bi_updateDateRangeData', methods=['GET'])
+def bi_updateDRdata():
+    df = getForecastforDateRangeFunction_bi()
+    
+    df.set_index('Datetime', inplace=True)
+    df.to_sql(name='bidirectional_daterange_data', con=engine, index=True, index_label='Datetime', if_exists='replace', method='multi', dtype={'Datetime': DateTime(50)})
+
+    return jsonify("DateRange Data Updated")
 
 if __name__ == '__main__':
     app.run(debug=True)
