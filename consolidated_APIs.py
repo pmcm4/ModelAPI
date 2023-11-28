@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, send_file
+from flask import Flask, jsonify, send_file, g
 import io
 from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, getAttnScores, updateMainData, getRiverCastMAE, getForecastforDateRangeFunction
 from bidirectionalAPI.bidirectionalModel import initiate_model_instance_bi, bi_getAttnScores, bi_forecast, getBidirectionalMAE, getForecastforDateRangeFunction_bi
@@ -16,53 +16,95 @@ from PIL import Image
 from flask_cors import CORS  # Import CORS from flask_cors
 import pandas as pd
 from sqlalchemy.exc import NoSuchTableError
-
+from io import BytesIO
+import os
 
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
 
 
-mydb = mysql.connector.connect(
-  host="database-1.cccp1zhjxtzi.ap-southeast-1.rds.amazonaws.com",
-  user="admin",
-  password="Nath1234",
-  database= "rivercast"
-)
+DB_CONFIG = {
+    "host": "localhost",
+    "user": "root",
+    "password": "pmcm4",
+    "database": "rivercast_model"
+}
 
-engine = create_engine("mysql+pymysql://" + "admin" + ":" + "Nath1234" + "@" + "database-1.cccp1zhjxtzi.ap-southeast-1.rds.amazonaws.com" + "/" + "rivercast")
+def get_db():
+    if 'db' not in g:
+        g.db = mysql.connector.connect(**DB_CONFIG)
+    return g.db
 
-cursor = mydb.cursor()
+def close_db(e=None):
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
 
-print(mydb)
+@app.before_request
+def before_request():
+    g.db = get_db()
+
+@app.teardown_request
+def teardown_request(e=None):
+    close_db()
+
+engine = create_engine("mysql+pymysql://" + "root" + ":" + "pmcm4" + "@" + "localhost" + "/" + "rivercast_model")
 
 # RIVERCAST APIs
 
-# Function to generate and save the plot
-def save_plot(data, filename):
-    plt.plot(data)
-    image_stream = io.BytesIO()
-    plt.savefig(image_stream, format='png')
-    image_stream.seek(0)
-    plt.clf()  # Clear the plot for the next use
-    return image_stream
+def save_plot(data, filename, directory, text_color='white', inner_box_border_color='white'):
+    # Assuming 'data' is your data to be plotted
+    fig, ax = plt.subplots(facecolor='#0e1318')
+    ax.set_facecolor('#0e1318')  # Set the background color of the inner area
+    ax.plot(data)
 
+    # Customize the color of tick labels
+    ax.tick_params(axis='x', colors=text_color)
+    ax.tick_params(axis='y', colors=text_color)
+
+    # Set the color of the inner box border
+    for spine in ax.spines.values():
+        spine.set_edgecolor(inner_box_border_color)
+
+    # Create the full path for saving the image
+    full_path = os.path.join(directory, filename)
+
+    # Save the plot to the specified directory
+    plt.savefig(full_path, format='png')
+    
+    # Clear the plot to prevent it from being displayed in the response
+    plt.clf()
+    plt.close()
+
+    return full_path
 
 # Endpoint for raw data plot
 @app.route('/RC_raw_data_plot', methods=['GET'])
 def rc_raw_data_plot():
     
-    rd = initiate_model_instance.rawData
-    image_stream = save_plot(rd, 'raw_data_plot.png')
+    rd = initiate_model_instance.rawData['2022-01-01':]
+
+    save_directory = '../client/src/assets/rivercastImages'
+
+    image_stream = save_plot(rd, 'RawData.png', save_directory)
+
     return send_file(image_stream, mimetype='image/png')
 
 # Endpoint for clean data plot
 @app.route('/RC_clean_data_plot', methods=['GET'])
 def rc_clean_data_plot():
+    # Assuming initiate_model_instance.cleanData is already defined
+    cd = initiate_model_instance.cleanData['2022-01-01':]
     
-    cd = initiate_model_instance.cleanData
-    image_stream = save_plot(cd, 'clean_data_plot.png')
-    return send_file(image_stream, mimetype='image/png')
+    # Specify the directory where you want to save the image
+    save_directory = '../client/src/assets/rivercastImages'
+    
+    # Save the plot and get the full path of the saved image
+    image_path = save_plot(cd, 'cleanData.png', save_directory)
+    
+    # Send the saved image as a response
+    return send_file(image_path, mimetype='image/png')
 
 
 @app.route('/RC_attention_scores', methods=['GET'])
@@ -144,7 +186,7 @@ def rc_addMAE():
 
     # Use 'DateTime' as the index label in the database with a specified key length
     df2.to_sql(
-        name='rivercast_df_with_MAE',
+        name='rivercast_df_with_mae',
         con=engine,
         index=True,
         index_label='Datetime',
@@ -161,7 +203,7 @@ def rc_addMAE():
 
     # Use 'DateTime' as the index label in the database with a specified key length
     df3.to_sql(
-        name='rivercast_overall_MAEs',
+        name='rivercast_overall_maes',
         con=engine,
         index=True,
         index_label='cnt',
@@ -177,7 +219,7 @@ def updateModelData():
 
     if update_result[1] != "Data are up-to-date":
         dftosql = update_result[0]
-        engine = create_engine("mysql+pymysql://" + "admin" + ":" + "Nath1234" + "@" + "database-1.cccp1zhjxtzi.ap-southeast-1.rds.amazonaws.com" + "/" + "rivercast")
+        engine = create_engine("mysql+pymysql://" + "root" + ":" + "pmcm4" + "@" + "localhost" + "/" + "rivercast_model")
 
         # Create an inspector and check if the table 'modelData' already exists in the database
         inspector = inspect(engine)
@@ -197,7 +239,7 @@ def updateModelData():
 
 @app.route('/rc_updateDateRangeData', methods=['GET'])
 def rc_updateDRdata():
-    df = getForecastforDateRangeFunction()
+    df = getForecastforDateRangeFunction_bi()
 
     df.set_index('Datetime', inplace=True)
     df.to_sql(name='rivercast_daterange_data', con=engine, index=True, index_label='Datetime', if_exists='replace', method='multi', dtype={'Datetime': DateTime(50)})
@@ -211,16 +253,24 @@ def rc_updateDRdata():
 @app.route('/bidirectional_raw_data_plot', methods=['GET'])
 def bi_raw_data_plot():
     
-    rd = initiate_model_instance.rawData
-    image_stream = save_plot(rd, 'raw_data_plot.png')
+    rd = initiate_model_instance.rawData['2022-01-01':]
+
+    save_directory = '../client/src/assets/biimages'
+
+    image_stream = save_plot(rd, 'rawDataBidirectional-removebg-preview.png', save_directory)
+
     return send_file(image_stream, mimetype='image/png')
 
 # Endpoint for clean data plot
 @app.route('/bidirectional_clean_data_plot', methods=['GET'])
 def bi_clean_data_plot():
     
-    cd = initiate_model_instance_bi.cleanData
-    image_stream = save_plot(cd, 'clean_data_plot.png')
+    cd = initiate_model_instance_bi.cleanData['2022-01-01':]
+
+    save_directory = '../client/src/assets/biimages'
+
+    image_stream = save_plot(cd, 'cleanDataBidirectional-removebg-preview.png', save_directory)
+
     return send_file(image_stream, mimetype='image/png')
 
 
@@ -285,7 +335,7 @@ def bi_addMAE():
 
     # Use 'DateTime' as the index label in the database with a specified key length
     df2.to_sql(
-        name='bidirectional_df_with_MAE',
+        name='bidirectional_df_with_mae',
         con=engine,
         index=True,
         index_label='Datetime',
@@ -302,7 +352,7 @@ def bi_addMAE():
 
     # Use 'DateTime' as the index label in the database with a specified key length
     df3.to_sql(
-        name='bidirectional_overall_MAEs',
+        name='bidirectional_overall_maes',
         con=engine,
         index=True,
         index_label='cnt',
@@ -314,7 +364,7 @@ def bi_addMAE():
 
 @app.route('/bi_updateDateRangeData', methods=['GET'])
 def bi_updateDRdata():
-    df = getForecastforDateRangeFunction_bi()
+    df = getForecastforDateRangeFunction()
     
     df.set_index('Datetime', inplace=True)
     df.to_sql(name='bidirectional_daterange_data', con=engine, index=True, index_label='Datetime', if_exists='replace', method='multi', dtype={'Datetime': DateTime(50)})

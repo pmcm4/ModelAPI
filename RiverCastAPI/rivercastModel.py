@@ -14,16 +14,17 @@ import io
 import requests
 from metpy.calc import specific_humidity_from_dewpoint
 from metpy.units import units
+import json
 
 import mysql.connector
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 
 mydb = mysql.connector.connect(
-host="database-1.cccp1zhjxtzi.ap-southeast-1.rds.amazonaws.com",
-user="admin",
-password="Nath1234",
-database= "rivercast"
+host="localhost",
+user="root",
+password="pmcm4",
+database= "rivercast_model"
 )
 
 class initiate_model():
@@ -37,7 +38,7 @@ class initiate_model():
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # configure GPU    utilization
 
         mydb._open_connection()
-        query = "SELECT * FROM rivercast.modelData;"
+        query = "SELECT * FROM rivercast_model.modelData;"
         result_dataFrame = pd.read_sql(query, mydb)
 
 
@@ -78,21 +79,17 @@ class initiate_model():
 
         self.rawData = df
 
-        # scale data
-        scaler = MinMaxScaler()
-        scaler.fit(df)
-        # train label scaler
-        self.label_scaler = MinMaxScaler()
-        self.label_scaler.fit(df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']])
+        self.dataset_min = df.min()
+        self.dataset_max = df.max()
 
-        scaled_ds = scaler.transform(df)
-        df = pd.DataFrame(scaled_ds, columns=df.columns, index=df.index)
+        df = (df - self.dataset_min) / (self.dataset_max - self.dataset_min)
 
         #PCA AND EUCLIDEAN KERNEL
 
         # center data
         rainfall_df = df[['RF-Intensity', 'RF-Intensity.1', 'RF-Intensity.2', 'RF-Intensity.3']]
 
+        plt.plot(rainfall_df, color='k', alpha=0.2)
 
         # calculate pairwise squared Euclidean distances
         sq_dists = sc.spatial.distance.pdist(rainfall_df.values.T, 'sqeuclidean')
@@ -119,6 +116,7 @@ class initiate_model():
         # center data
         precipitation_df = df[['Precipitation', 'Precipitation.1', 'Precipitation.2']]
 
+        plt.plot(precipitation_df, color='k', alpha=0.2)
 
         # calculate pairwise squared Euclidean distances
         sq_dists = sc.spatial.distance.pdist(precipitation_df.values.T, 'sqeuclidean')
@@ -145,7 +143,7 @@ class initiate_model():
         # center data
         humidity_df = df[['Humidity', 'Humidity.1', 'Humidity.2']]
 
-
+        plt.plot(humidity_df, color='k', alpha=0.2)
 
         # calculate pairwise squared Euclidean distances
         sq_dists = sc.spatial.distance.pdist(humidity_df.values.T, 'sqeuclidean')
@@ -172,7 +170,7 @@ class initiate_model():
         # center data
         temp_df = df[['Temperature', 'Temperature.1', 'Temperature.2']]
 
-
+        plt.plot(temp_df, color='k', alpha=0.2)
 
         # calculate pairwise squared Euclidean distances
         sq_dists = sc.spatial.distance.pdist(temp_df.values.T, 'sqeuclidean')
@@ -193,7 +191,7 @@ class initiate_model():
         eigenvalues, eigenvectors = np.linalg.eigh(K)
 
         # calculate components
-        temp_df = np.matmul(temp_df, eigenvectors)
+        temp_df = np.matmul(temp_df, eigenvectors) 
         temp_df = temp_df.iloc[:, 1]
 
         weather_df = pd.concat([rainfall_df, precipitation_df, humidity_df, temp_df], axis=1)
@@ -202,32 +200,11 @@ class initiate_model():
         river_df = df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']]
         self.reduced_df = pd.concat([river_df, weather_df], axis=1)
 
-
-
-
         self.cleanData = self.reduced_df
 
-initiate_model_instance = initiate_model()
+        mydb.close()
 
-class TimeSeriesDataset(torch.utils.data.Dataset):
-    def __init__(self, data, seq_len, step):
-        self.data = data
-        self.seq_len = seq_len
-        self.step = step
-        
-    def __getitem__(self, index):
-        in_start = index
-        in_end = in_start + self.seq_len
-        out_start = index + self.step
-        out_end = out_start + self.seq_len
-        
-        inputs = self.data[in_start:in_end]
-        labels = self.data[out_start:out_end]
-        
-        return inputs, labels
-    
-    def __len__(self):
-        return len(self.data) - (self.seq_len + self.step) + 1
+initiate_model_instance = initiate_model()
 
 BATCH_SIZE = 128
 SEQ_LEN = 180
@@ -235,170 +212,205 @@ SEQ_STEP = 60
 PRED_SIZE = 8
 D_MODEL = 8
 NUM_HEADS = 4
-NUM_LAYERS = 2
 D_FF = 2048 
-DROPOUT = 0.10
 
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
-        super(MultiHeadAttention, self).__init__()
-        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
-        
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-        
-        self.W_q = nn.Linear(d_model, d_model)
-        self.W_k = nn.Linear(d_model, d_model)
-        self.W_v = nn.Linear(d_model, d_model)
-        self.W_o = nn.Linear(d_model, d_model)
-        
-    def scaled_dot_product_attention(self, Q, K, V, mask=None):
-        mask = mask.to(initiate_model_instance.device)
-        attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
-        attn_scores = attn_scores.masked_fill(mask == 0, -1e9)
+# neural network functions
+def linear_activation(input, weights, biases):
+    batch_size, seq_length, d_model = input.shape  # extract input shape
+    
+    x_flat = np.reshape(input, (batch_size * seq_length, d_model))  # flatten input into (batch_size, d_model)
+    z_flat = np.dot(x_flat, weights.T) + biases
+    
+    return np.reshape(z_flat, (batch_size, seq_length, -1))  # reshape back to (batch_size, seq_length, d_model)
+
+
+def relu(input):
+    batch_size, seq_length, d_model = input.shape  # extract input shape
+    
+    x_flat = np.reshape(input, (batch_size * seq_length, d_model))  # flatten input into (batch_size, d_model)
+    a_flat = np.maximum(x_flat, 0) 
+    
+    return np.reshape(a_flat, (batch_size, seq_length, -1))  # reshape back to (batch_size, seq_length, d_model)
+
+
+def sigmoid(input):
+    batch_size, seq_length, d_model = input.shape  # extract input shape
+    
+    x_flat = np.reshape(input, (batch_size * seq_length, d_model))  # flatten input into (batch_size, d_model)
+    a_flat = 1 / (1 + np.exp(-x_flat))
+    
+    return np.reshape(a_flat, (batch_size, seq_length, -1))  # reshape back to (batch_size, seq_length, d_model)
+
+
+def softmax(input):
+    batch_size, seq_length, d_model = input.shape
+    
+    x_flat = np.reshape(input, (batch_size * seq_length, d_model)).T  # flatten input into (batch_size, d_model)
+    a_flat = np.exp(x_flat) / (np.sum(np.exp(x_flat), axis=0) + 1e-8)
+    
+    return np.reshape(a_flat.T, (batch_size, seq_length, -1))  # reshape back to (batch_size, seq_length, d_model)
+
+
+def layer_normalization(input, gamma, beta):
+    mean = np.mean(input, axis=-1, keepdims=True)  # get mean in each axis
+    std = np.std(input, axis=-1, keepdims=True)  # get standard deviation in each axis
+    
+    normalized = (input - mean) / (std + 1e-8)  # normalized activations 
+    
+    # reshape parameters to fit the input shape
+    gamma = np.reshape(gamma, (1, 1, -1))
+    beta = np.reshape(beta, (1, 1, -1))
+    
+    return gamma * normalized + beta  # normalized activations with size of (batch_size, seq_length, d_model)
+
+
+# positional encoding
+def positional_encoding(input, n=10000):
+    batch_size, seq_length, d_model = input.shape
+    
+    pe = np.zeros(shape=(seq_length, d_model))
+    for k in range(seq_length):
+        for i in np.arange(int(d_model / 2)):
+            denominator = np.power(n, 2 * i / d_model)
+            pe[k, 2*i] = np.sin(k / denominator)
+            pe[k, 2*i+1] = np.cos(k / denominator)
             
-        attn_probs = torch.softmax(attn_scores, dim=-1)
-        output = torch.matmul(attn_probs, V)
-        
-        return attn_probs, output
-        
-    def split_heads(self, x):
-        batch_size, seq_length, d_model = x.size()
-        return x.view(batch_size, seq_length, self.num_heads, self.d_k).transpose(1, 2)
-        
-    def combine_heads(self, x):
-        batch_size, _, seq_length, d_k = x.size()
-        return x.transpose(1, 2).contiguous().view(batch_size, seq_length, self.d_model)
-        
-    def forward(self, Q, K, V, mask=None):
-        Q = self.split_heads(self.W_q(Q))
-        K = self.split_heads(self.W_k(K))
-        V = self.split_heads(self.W_v(V))
-        
-        attn_scores, attn_output = self.scaled_dot_product_attention(Q, K, V, mask)
-        output = self.W_o(self.combine_heads(attn_output))
-        return attn_scores, output
+    return input + pe  # add positional encoding to input
+
+# multi-head attention
+def split_heads(input, num_heads):
+    batch_size, seq_length, d_model = input.shape
     
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_seq_length=2048):
-        super(PositionalEncoding, self).__init__()
-        
-        pe = torch.zeros(max_seq_length, d_model)
-        position = torch.arange(0, max_seq_length, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))
-        
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        
-        self.register_buffer('pe', pe.unsqueeze(0))
-        
-    def forward(self, x):
-        return x + self.pe[:, :x.size(1)]
+    assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
+    head_dim = d_model // num_heads
     
-class PositionWiseFeedForward(nn.Module):
-    def __init__(self, d_model, d_ff):
-        super(PositionWiseFeedForward, self).__init__()
-        self.fc1 = nn.Linear(d_model, d_ff)
-        self.fc2 = nn.Linear(d_ff, d_model)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        return self.fc2(self.relu(self.fc1(x)))
+    heads = np.reshape(input, (batch_size, seq_length, num_heads, head_dim))
+    heads = np.transpose(heads, (0, 2, 1, 3))
     
-class DecoderLayer(nn.Module):
-    def __init__(self, d_model, num_heads, d_ff, dropout):
-        super(DecoderLayer, self).__init__()
-        self.self_attn = MultiHeadAttention(d_model, num_heads)
-        self.feed_forward = PositionWiseFeedForward(d_model, d_ff)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x, mask=None):
-        attn_scores, attn_output = self.self_attn(x, x, x, mask)
-        x = self.norm1(x + self.dropout(attn_output))
-        ff_output = self.feed_forward(x)
-        x = self.norm2(x + self.dropout(ff_output))
-        return attn_scores, x
+    return heads  # attention heads with size of (batch_size, num_heads, seq_length, head_dim)
+
+
+def combine_heads(input):
+    combined = np.transpose(input, (0, 2, 1, 3))
+    combined = np.reshape(combined, (combined.shape[0], combined.shape[1], -1))
     
-class Transformer(nn.Module):
-    def __init__(self, pred_size, d_model, num_heads, num_layers, d_ff, dropout):
-        super(Transformer, self).__init__()
-        self.positional_encoding = PositionalEncoding(d_model)
-        self.decoder_layers = nn.ModuleList([DecoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)])
-        self.fc = nn.Linear(d_model, pred_size)
-        self.sigmoid = nn.Sigmoid()
-        self.dropout = nn.Dropout(dropout)
-        
-    def generate_mask(self, tgt):
-        seq_length = tgt.size(1)
-        tgt_mask = (1 - torch.triu(torch.ones(1, seq_length, seq_length), diagonal=1)).bool()
-        return tgt_mask
+    return combined  # combined attention heads with size of (batch_size, seq_length, d_model)
 
-    def forward(self, tgt):
-        mask = self.generate_mask(tgt).to()
-        tgt_embedded = self.dropout(self.positional_encoding(tgt))
 
-        dec_output = tgt_embedded
-        for dec_layer in self.decoder_layers:
-            attn_scores, dec_output = dec_layer(dec_output, mask)
+def scaled_dot_product_attention(query, key, value):
+    batch_size, num_heads, seq_length, head_dim = query.shape
+    
+    # convert input into (batch_size, seq_length, d_model)
+    query = np.reshape(query, (batch_size * num_heads, seq_length, head_dim))  
+    key = np.reshape(key, (batch_size * num_heads, seq_length, head_dim))
+    value = np.reshape(value, (batch_size * num_heads, seq_length, head_dim))
+    
+    key = np.transpose(key, (0, 2, 1))  # transpose key
+    attn_scores = np.matmul(query, key) / math.sqrt(head_dim)  # get dot product attention
+    
+    # generate auto-regressive mask
+    attn_scores = np.ma.array(attn_scores, mask=np.triu(np.ones(shape=(batch_size * num_heads, seq_length, seq_length)), k=1))
+    attn_scores = attn_scores.filled(fill_value=-1e9)
+    
+    attn_scores = softmax(attn_scores)  # convert attention scores into probabilities
+    
+    value = np.matmul(attn_scores, value)  # embed attention scores into value
+    
+    return np.reshape(attn_scores, (batch_size, num_heads, seq_length, seq_length)), np.reshape(value, (batch_size, num_heads, seq_length, head_dim))  # reshape to original size
 
-        output = self.sigmoid(self.fc(dec_output))
-        return attn_scores, output
 
-# define the model
-decomposer = Transformer(
-    pred_size=PRED_SIZE,
-    d_model=D_MODEL,
-    num_heads=NUM_HEADS,
-    num_layers=NUM_LAYERS,
-    d_ff=D_FF,
-    dropout=DROPOUT
-).float()
+def multi_head_self_attention(query, key, value, num_heads, params):
+    query = split_heads(linear_activation(query, params[0], params[1]), num_heads)
+    key = split_heads(linear_activation(key, params[2], params[3]), num_heads)
+    value = split_heads(linear_activation(value, params[4], params[5]), num_heads)
+    
+    attn_scores, attn_output = scaled_dot_product_attention(query, key, value)
+    attn_output = linear_activation(combine_heads(attn_output), params[6], params[7])
+    
+    return attn_scores, attn_output
 
-test_data = initiate_model_instance.reduced_df['2021-01-01':'2023-01-01'].values
+# feed forward network
+def feed_forward_network(input, params):
+    out = linear_activation(input, params[0], params[1])
+    out = relu(out)
+    out = linear_activation(out, params[2], params[3])
+    
+    return out
 
-test_dataset = TimeSeriesDataset(test_data, seq_len=SEQ_LEN, step=SEQ_STEP)
+# decoder layer
+def transformer_decoder(input, num_heads, params):
+    attn_scores, attn_out = multi_head_self_attention(
+        query=input,
+        key=input, 
+        value=input, 
+        num_heads=num_heads, 
+        params=params[:8])
+    norm1 = layer_normalization(input + attn_out, params[12], params[13])
+    ff_out = feed_forward_network(norm1, params[8:12])
+    norm2 = layer_normalization(norm1 + ff_out, params[14], params[15])
+    
+    return attn_scores, norm2
 
-test_dataloader = torch.utils.data.DataLoader(
-    test_dataset,
-    batch_size=len(test_data),
-    shuffle=False,
-    drop_last=False
-)
+# model
+def transformer(input, num_heads, params):
+    out = positional_encoding(input)
+    
+    # decoder layers
+    _, out = transformer_decoder(out, num_heads, params[:16])
+    scores, out = transformer_decoder(out, num_heads, params[16:32])
+    
+    # final layer
+    out = linear_activation(out, params[32], params[33])
+    out = sigmoid(out)
+    
+    return scores, out
 
-decomposer.to(initiate_model_instance.device)
+# load parameters from file
+with open("rivercast_parameters.json", "r") as parameters:
+    saved_params = json.load(parameters)
+    
+# iterate through layer parameters
+params = []
+for key in saved_params.keys():
+    param = np.asarray(saved_params[key], dtype=np.float32)  # convert saved parameters back to numpy
+    params.append(param)
+    
+len(params)  # print number of layer parameters
 
-decomposer.load_state_dict(torch.load('rivercast_transformer.pth'))
 
-decomposer.eval()  # set model on test mode
-inputs, labels = [(inputs, labels) for _, (inputs, labels) in enumerate(test_dataloader)][0]  # fetch the test dataset
+
+
+def inverse_transform(data):
+    data_min = initiate_model_instance.dataset_min[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']].to_numpy()
+    data_max = initiate_model_instance.dataset_max[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']].to_numpy()
+    
+    return (data_max - data_min) * data + data_min
+
+
+def mean_absolute_error(y_true, y_pred):
+    return np.mean(np.abs(y_true - y_pred))
+
 
 def forecast():
-
     test_data = initiate_model_instance.reduced_df[-180:].values
     test_dates = initiate_model_instance.reduced_df[-180:].index
     test_dates = test_dates[60:240]    
     x_test = test_data[:180]
     y_label = test_data[60:]
-    y_label = initiate_model_instance.label_scaler.inverse_transform(y_label[:, :4])
+    y_label = inverse_transform(y_label[:, :4])
 
     x_test = np.reshape(x_test, (1, x_test.shape[0], x_test.shape[1]))
 
-    decomposer.eval()  # set model on test mode
-
-    x_test = torch.from_numpy(x_test).float().to(initiate_model_instance.device)
-    attn_scores, y_test = decomposer(x_test)  # make forecast
-    y_test = y_test.detach().cpu().numpy()
+    attn_scores, y_test = transformer(input=x_test, num_heads=NUM_HEADS, params=params)  # make forecast
     y_test = np.reshape(y_test, (y_test.shape[1], y_test.shape[2]))
-    y_test = initiate_model_instance.label_scaler.inverse_transform(y_test[:, :4])
+    y_test = inverse_transform(y_test[:, :4])
+
 
     time_steps_per_day = 4  # Assuming 4 time steps per day (6 hours per time step)
     forecast_days = 15
-    
+    mydb._open_connection()
     cursor = mydb.cursor()
-    cursor.execute("SELECT DateTime FROM rivercast.rivercast_waterlevel_prediction order by DateTime DESC LIMIT 1")
+    cursor.execute("SELECT DateTime FROM rivercast_model.rivercast_waterlevel_prediction order by DateTime DESC LIMIT 1")
     lastPredDT = cursor.fetchone()[0]
     formatted_lastPredDT = lastPredDT.strftime('%Y-%m-%d %H:%M:%S')
     # Extract the forecast for the next 15 days
@@ -410,10 +422,10 @@ def forecast():
     forecast_df.insert(0, "DateTime", forecast_dates)
 
     matches_and_following_rows_pred = forecast_df[forecast_df['DateTime'] >= formatted_lastPredDT] # then match the last datetime predicted to dynamically adjust the predicted values in the database
-    
 
 
-    cursor.execute("SELECT DateTime FROM rivercast.rivercast_waterlevel_obs order by DateTime DESC LIMIT 1")
+
+    cursor.execute("SELECT DateTime FROM rivercast_model.rivercast_waterlevel_obs order by DateTime DESC LIMIT 1")
     lastTrueDT = cursor.fetchone()[0] + timedelta(hours=6)
 
     # Extract the forecast for the next 15 days
@@ -427,32 +439,45 @@ def forecast():
     formatted_lastTrueDT = lastTrueDT.strftime('%Y-%m-%d %H:%M:%S')
 
     matches_and_following_rows = true_df[true_df['DateTime'] >= formatted_lastTrueDT]
-
+    mydb.close()
     return matches_and_following_rows_pred[1:2], matches_and_following_rows
+ 
+
+test_data = initiate_model_instance.reduced_df['2021-01-01':].values
+dataset_len = len(test_data) - (SEQ_LEN + SEQ_STEP) + 1
+
+# prepare batches
+batches = []
+for index in range(dataset_len):
+    in_start = index
+    in_end = in_start + SEQ_LEN
+    out_start = index + SEQ_STEP
+    out_end = out_start + SEQ_LEN
+    
+    input = test_data[in_start:in_end]
+    label = test_data[out_start:out_end]
+    
+    batches.append((np.array(input), np.array(label)))
 
 def getRiverCastMAE():
+
+
     # measure accuracy of each window
     accuracy = []
     predictions = []
-    date_times = []
-    for i in range(len(inputs)):
-        x_test = inputs[i:(i+1)].float().to(initiate_model_instance.device)
-
-        attn_scores, y_test = decomposer(x_test)  # make forecast
-        y_test = torch.squeeze(y_test, dim=0)
-        y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
-        y_test = initiate_model_instance.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
-        y_test = y_test[-SEQ_STEP:]  # get only the forecast window
-
-        # evaluate model accuracy
-        ground = torch.squeeze(labels[i:(i+1)], dim=0)  # get observed values
-        ground = ground.numpy()
-        ground = initiate_model_instance.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
+    for input, label in batches:
+        
+        input = np.reshape(input, (1, SEQ_LEN, D_MODEL))
+        scores, pred = transformer(input=input, num_heads=NUM_HEADS, params=params)  # make forecast
+        pred = np.reshape(pred, (SEQ_LEN, D_MODEL))  
+        pred = inverse_transform(pred[:, :4])  # scale output to original value
+        pred = pred[-SEQ_STEP:]   # get only the forecast window
+        
+        ground = inverse_transform(label[:, :4])  # scale output to original value
         ground = ground[-SEQ_STEP:]  # get only the forecast window
-
-        accuracy.append(mean_absolute_error(ground, y_test))  # collect mean absolute error of each window
-        predictions.append(np.concatenate((y_test[0], ground[0])))  # collect first element of output
-        date_times.append(initiate_model_instance.rawData.index[i + len(initiate_model_instance.rawData) - len(accuracy)])  # get corresponding DateTime
+        
+        accuracy.append(mean_absolute_error(ground, pred))  # collect mean absolute error of each window
+        predictions.append(np.concatenate((pred[0], ground[0])))  # collect first element of output
 
         
     accuracy_df = pd.DataFrame(np.array(accuracy), columns=['MAE'])
@@ -461,10 +486,10 @@ def getRiverCastMAE():
     metric_df.index = initiate_model_instance.sampling.index[-len(metric_df):]
 
     metric_df = metric_df.resample('24H').max()
-    metric_df.to_csv('results.csv')  # save test results
-    
-    pass_metric = pd.read_csv('results.csv')
-    
+    metric_df.to_csv('rivercast_results.csv')  # save test results
+
+    pass_metric = pd.read_csv('rivercast_results.csv')
+
 
     a_MAEs = []
     t_MAEs = []
@@ -474,7 +499,7 @@ def getRiverCastMAE():
 
     tMae = mean_absolute_error(metric_df[['T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3']], metric_df[['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3']])
     t_MAEs.append(tMae)
-    
+
     aveMAE = pd.DataFrame(np.array(a_MAEs), columns = ['aMAE'])
     tMAE = pd.DataFrame(np.array(t_MAEs), columns = ['tMAE'])
 
@@ -486,50 +511,7 @@ def getRiverCastMAE():
     return pass_metric, pass_MAEs
 
 def getForecastforDateRangeFunction():
-    test_data = initiate_model_instance.reduced_df['2012-01-01':].values
-
-    test_dataset = TimeSeriesDataset(test_data, seq_len=SEQ_LEN, step=SEQ_STEP)
-
-    test_dataloader = torch.utils.data.DataLoader(
-        test_dataset,
-        batch_size=len(test_data),
-        shuffle=False,
-        drop_last=False
-    )
-
-    decomposer.load_state_dict(torch.load('rivercast_transformer.pth'))  # load the trained model
-
-    decomposer.eval()  # set model on test mode
-
-    inputs, labels = [(inputs, labels) for _, (inputs, labels) in enumerate(test_dataloader)][0]  # fetch the test dataset
-
-    # measure accuracy of each window
-    accuracy = []
-    predictions = []
-    for i in range(len(inputs)):
-        x_test = inputs[i:(i+1)].float().to(initiate_model_instance.device)
-
-        attn_scores, y_test = decomposer(x_test)  # make forecast
-        y_test = torch.squeeze(y_test, dim=0)
-        y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
-        y_test = initiate_model_instance.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
-
-        # evaluate model accuracy
-        ground = torch.squeeze(labels[i:(i+1)], dim=0)  # get observed values
-        ground = ground.numpy()
-        ground = initiate_model_instance.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
-
-        accuracy.append(mean_absolute_error(ground, y_test))  # collect mean absolute error of each window
-        predictions.append(np.concatenate((y_test[0], ground[0])))  # collect first element of output
-        
-    accuracy_df = pd.DataFrame(np.array(accuracy), columns=['MAE'])
-    predictions_df = pd.DataFrame(np.array(predictions), columns=['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3', 'T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3'])
-    metric_df = pd.concat([accuracy_df, predictions_df], axis=1)
-    metric_df.index = initiate_model_instance.rawData.index[-len(metric_df):]
-
-    metric_df.to_csv('rivercast_date_range.csv')  # save test results
-
-    pass_metric_df = pd.read_csv('rivercast_date_range.csv')
+    pass_metric_df = pd.read_csv('numpy_rivercast_date_range.csv')
 
     return pass_metric_df
 
@@ -539,10 +521,11 @@ def getLatest_Datetime():
     mydb._open_connection()
     cursor = mydb.cursor()
 
-    cursor.execute("SELECT Date_Time FROM rivercast.modelData order by Date_Time DESC LIMIT 1")
+    cursor.execute("SELECT Date_Time FROM rivercast_model.modelData order by Date_Time DESC LIMIT 1")
     lastDTindex = cursor.fetchone()
 
-
+    
+    mydb.close()
     return lastDTindex
 
 
@@ -801,17 +784,14 @@ def updateMainData():
 
 
 
-
 def getAttnScores(window=240, kernel_size=15):
-    x_test = inputs[window:(window+1)].float().to(initiate_model_instance.device)
+    x_test = input[window:(window+1)].float().to(initiate_model_instance.device)
 
-    attn_scores, y_test = decomposer(x_test)  # make forecast
-    y_test = torch.squeeze(y_test, dim=0)
-    y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
-    y_test = initiate_model_instance.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
+    attn_scores, y_test = transformer(input=x_test, num_heads=NUM_HEADS, params=params)
+    y_test = inverse_transform(y_test[:, :4])  # scale output to original value
     y_test = y_test[-SEQ_STEP:]  # get only the forecast window
 
-    ground = torch.squeeze(labels[window:(window+1)], dim=0)  # get observed values
+    ground = torch.squeeze(label[window:(window+1)], dim=0)  # get observed values
     ground = ground.numpy()
     ground = initiate_model_instance.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
     ground = ground[-SEQ_STEP:]  # get only the forecast window
@@ -821,11 +801,6 @@ def getAttnScores(window=240, kernel_size=15):
         plt.plot(np.convolve(y_test[:, i], np.ones(30), 'valid') / 30)
         plt.plot(ground[30:, i], color='k', alpha=0.3)
         plt.show()
-
-    # plot attention scores
-    attn_scores = torch.squeeze(attn_scores, dim=0)
-    attn_scores = attn_scores.detach().cpu().numpy()  # transfer output from GPU to CPU
-    
     
     attention_score_images = []
 

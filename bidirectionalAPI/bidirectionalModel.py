@@ -14,16 +14,16 @@ import io
 import requests
 from metpy.calc import specific_humidity_from_dewpoint
 from metpy.units import units
-
+import json
 import mysql.connector
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine
 
 mydb = mysql.connector.connect(
-host="database-1.cccp1zhjxtzi.ap-southeast-1.rds.amazonaws.com",
-user="admin",
-password="Nath1234",
-database= "rivercast"
+host="localhost",
+user="root",
+password="pmcm4",
+database= "rivercast_model"
 )
 
 class bi_initiate_model():
@@ -35,7 +35,7 @@ class bi_initiate_model():
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # configure GPU    utilization
 
         mydb._open_connection()
-        query = "SELECT * FROM rivercast.modelData;"
+        query = "SELECT * FROM rivercast_model.modelData;"
         result_dataFrame = pd.read_sql(query, mydb)
         
 
@@ -77,222 +77,222 @@ class bi_initiate_model():
         self.rawData = df
         
 
-        # scale data
-        scaler = MinMaxScaler()
-        scaler.fit(df)
-        # train label scaler
-        self.label_scaler = MinMaxScaler()
-        self.label_scaler.fit(df[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']])
+        self.dataset_min = df.min()
+        self.dataset_max = df.max()
 
-        scaled_ds = scaler.transform(df)
-        self.df = pd.DataFrame(scaled_ds, columns=df.columns, index=df.index)
+        self.normalized_df = (df - self.dataset_min) / (self.dataset_max - self.dataset_min)
 
-        self.cleanData = self.df
+
+        self.cleanData = self.normalized_df
+
+        mydb.close()
 
 initiate_model_instance_bi = bi_initiate_model()
 
-class TimeSeriesDataset(torch.utils.data.Dataset):
-    def __init__(self, data, seq_len, step):
-        self.data = data
-        self.seq_len = seq_len
-        self.step = step
-        
-    def __getitem__(self, index):
-        in_start = index
-        in_end = in_start + self.seq_len
-        out_start = index + self.step
-        out_end = out_start + self.seq_len
-        
-        inputs = self.data[in_start:in_end]
-        labels = self.data[out_start:out_end, :4]
-        
-        return inputs, labels
-    
-    def __len__(self):
-        return len(self.data) - (self.seq_len + self.step) + 1
-    
 BATCH_SIZE = 128
 SEQ_LEN = 180
 SEQ_STEP = 60
 PRED_SIZE = 4
 D_MODEL = 16
 NUM_HEADS = 4
-NUM_LAYERS = 2
 D_FF = 2048 
-DROPOUT = 0.10
 
-
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
-        super(MultiHeadAttention, self).__init__()
-        assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
-        
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-        
-        self.W_q = nn.Linear(d_model, d_model)
-        self.W_k = nn.Linear(d_model, d_model)
-        self.W_v = nn.Linear(d_model, d_model)
-        self.W_o = nn.Linear(d_model, d_model)
-        
-    def scaled_dot_product_attention(self, Q, K, V):
-        attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
-        attn_probs = torch.softmax(attn_scores, dim=-1)
-        output = torch.matmul(attn_probs, V)
-        
-        return attn_probs, output
-        
-    def split_heads(self, x):
-        batch_size, seq_length, d_model = x.size()
-        return x.view(batch_size, seq_length, self.num_heads, self.d_k).transpose(1, 2)
-        
-    def combine_heads(self, x):
-        batch_size, _, seq_length, d_k = x.size()
-        return x.transpose(1, 2).contiguous().view(batch_size, seq_length, self.d_model)
-        
-    def forward(self, Q, K, V):
-        Q = self.split_heads(self.W_q(Q))
-        K = self.split_heads(self.W_k(K))
-        V = self.split_heads(self.W_v(V))
-        
-        attn_scores, attn_output = self.scaled_dot_product_attention(Q, K, V)
-        output = self.W_o(self.combine_heads(attn_output))
-        return attn_scores, output
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model, max_seq_length=2048):
-        super(PositionalEncoding, self).__init__()
-        
-        pe = torch.zeros(max_seq_length, d_model)
-        position = torch.arange(0, max_seq_length, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))
-        
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        
-        self.register_buffer('pe', pe.unsqueeze(0))
-        
-    def forward(self, x):
-        return x + self.pe[:, :x.size(1)]
+# neural network functions
+def linear_activation(input, weights, biases):
+    batch_size, seq_length, d_model = input.shape  # extract input shape
     
-class PositionWiseFeedForward(nn.Module):
-    def __init__(self, d_model, d_ff):
-        super(PositionWiseFeedForward, self).__init__()
-        self.fc1 = nn.Linear(d_model, d_ff)
-        self.fc2 = nn.Linear(d_ff, d_model)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        return self.fc2(self.relu(self.fc1(x)))
-
-class EncoderLayer(nn.Module):
-    def __init__(self, d_model, num_heads, d_ff, dropout):
-        super(EncoderLayer, self).__init__()
-        self.self_attn = MultiHeadAttention(d_model, num_heads)
-        self.feed_forward = PositionWiseFeedForward(d_model, d_ff)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x):
-        attn_scores, attn_output = self.self_attn(x, x, x)
-        x = self.norm1(x + self.dropout(attn_output))
-        ff_output = self.feed_forward(x)
-        x = self.norm2(x + self.dropout(ff_output))
-        return attn_scores, x
-
-class Transformer(nn.Module):
-    def __init__(self, pred_size, d_model, num_heads, num_layers, d_ff, dropout):
-        super(Transformer, self).__init__()
-        self.positional_encoding = PositionalEncoding(d_model)
-        self.encoder_layers = nn.ModuleList([EncoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)])
-        self.fc = nn.Linear(d_model, pred_size)
-        self.sigmoid = nn.Sigmoid()
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, tgt):
-        tgt_embedded = self.dropout(self.positional_encoding(tgt))
-
-        enc_output = tgt_embedded
-        for enc_layer in self.encoder_layers:
-            attn_scores, enc_output = enc_layer(enc_output)
-
-        output = self.sigmoid(self.fc(enc_output))
-        return attn_scores, output
-
-# define the model
-decomposer = Transformer(
-    pred_size=PRED_SIZE,
-    d_model=D_MODEL,
-    num_heads=NUM_HEADS,
-    num_layers=NUM_LAYERS,
-    d_ff=D_FF,
-    dropout=DROPOUT
-).float()
-
-decomposer.to(initiate_model_instance_bi.device)
+    x_flat = np.reshape(input, (batch_size * seq_length, d_model))  # flatten input into (batch_size, d_model)
+    z_flat = np.dot(x_flat, weights.T) + biases
+    
+    return np.reshape(z_flat, (batch_size, seq_length, -1))  # reshape back to (batch_size, seq_length, d_model)
 
 
-# test if the model is working properly using random values
-decomposer.eval()
-
-sample = np.random.rand(1, SEQ_LEN, D_MODEL)
-output = torch.from_numpy(sample).float().to(initiate_model_instance_bi.device)
-scores, output = decomposer(output)
-output = output.detach().cpu().numpy()
-scores = scores.detach().cpu().numpy()
-
+def relu(input):
+    batch_size, seq_length, d_model = input.shape  # extract input shape
+    
+    x_flat = np.reshape(input, (batch_size * seq_length, d_model))  # flatten input into (batch_size, d_model)
+    a_flat = np.maximum(x_flat, 0) 
+    
+    return np.reshape(a_flat, (batch_size, seq_length, -1))  # reshape back to (batch_size, seq_length, d_model)
 
 
-test_data = initiate_model_instance_bi.df['2021-01-01':'2023-01-01'].values
-
-test_dataset = TimeSeriesDataset(test_data, seq_len=SEQ_LEN, step=SEQ_STEP)
-
-test_dataloader = torch.utils.data.DataLoader(
-    test_dataset,
-    batch_size=len(test_data),
-    shuffle=False,
-    drop_last=False
-)
+def sigmoid(input):
+    batch_size, seq_length, d_model = input.shape  # extract input shape
+    
+    x_flat = np.reshape(input, (batch_size * seq_length, d_model))  # flatten input into (batch_size, d_model)
+    a_flat = 1 / (1 + np.exp(-x_flat))
+    
+    return np.reshape(a_flat, (batch_size, seq_length, -1))  # reshape back to (batch_size, seq_length, d_model)
 
 
+def softmax(input):
+    batch_size, seq_length, d_model = input.shape
+    
+    x_flat = np.reshape(input, (batch_size * seq_length, d_model)).T  # flatten input into (batch_size, d_model)
+    a_flat = np.exp(x_flat) / (np.sum(np.exp(x_flat), axis=0) + 1e-8)
+    
+    return np.reshape(a_flat.T, (batch_size, seq_length, -1))  # reshape back to (batch_size, seq_length, d_model)
 
 
-decomposer.load_state_dict(torch.load('bidirectional_transformer.pth', map_location=torch.device('cpu')))
-  # load the trained model
+def layer_normalization(input, gamma, beta):
+    mean = np.mean(input, axis=-1, keepdims=True)  # get mean in each axis
+    std = np.std(input, axis=-1, keepdims=True)  # get standard deviation in each axis
+    
+    normalized = (input - mean) / (std + 1e-8)  # normalized activations 
+    
+    # reshape parameters to fit the input shape
+    gamma = np.reshape(gamma, (1, 1, -1))
+    beta = np.reshape(beta, (1, 1, -1))
+    
+    return gamma * normalized + beta  # normalized activations with size of (batch_size, seq_length, d_model)
 
-decomposer.eval()  # set model on test mode1
+# positional encoding
+def positional_encoding(input, n=10000):
+    batch_size, seq_length, d_model = input.shape
+    
+    pe = np.zeros(shape=(seq_length, d_model))
+    for k in range(seq_length):
+        for i in np.arange(int(d_model / 2)):
+            denominator = np.power(n, 2 * i / d_model)
+            pe[k, 2*i] = np.sin(k / denominator)
+            pe[k, 2*i+1] = np.cos(k / denominator)
+            
+    return input + pe  # add positional encoding to input
 
-inputs, labels = [(inputs, labels) for _, (inputs, labels) in enumerate(test_dataloader)][0]  # fetch the test dataset
+
+# multi-head attention
+def split_heads(input, num_heads):
+    batch_size, seq_length, d_model = input.shape
+    
+    assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
+    head_dim = d_model // num_heads
+    
+    heads = np.reshape(input, (batch_size, seq_length, num_heads, head_dim))
+    heads = np.transpose(heads, (0, 2, 1, 3))
+    
+    return heads  # attention heads with size of (batch_size, num_heads, seq_length, head_dim)
+
+
+def combine_heads(input):
+    combined = np.transpose(input, (0, 2, 1, 3))
+    combined = np.reshape(combined, (combined.shape[0], combined.shape[1], -1))
+    
+    return combined  # combined attention heads with size of (batch_size, seq_length, d_model)
+
+
+def scaled_dot_product_attention(query, key, value):
+    batch_size, num_heads, seq_length, head_dim = query.shape
+    
+    # convert input into (batch_size, seq_length, d_model)
+    query = np.reshape(query, (batch_size * num_heads, seq_length, head_dim))  
+    key = np.reshape(key, (batch_size * num_heads, seq_length, head_dim))
+    value = np.reshape(value, (batch_size * num_heads, seq_length, head_dim))
+    
+    key = np.transpose(key, (0, 2, 1))  # transpose key
+    attn_scores = np.matmul(query, key) / math.sqrt(head_dim)  # get dot product attention
+    
+    attn_scores = softmax(attn_scores)  # convert attention scores into probabilities
+    
+    value = np.matmul(attn_scores, value)  # embed attention scores into value
+    
+    return np.reshape(attn_scores, (batch_size, num_heads, seq_length, seq_length)), np.reshape(value, (batch_size, num_heads, seq_length, head_dim))  # reshape to original size
+
+
+def multi_head_self_attention(query, key, value, num_heads, params):
+    query = split_heads(linear_activation(query, params[0], params[1]), num_heads)
+    key = split_heads(linear_activation(key, params[2], params[3]), num_heads)
+    value = split_heads(linear_activation(value, params[4], params[5]), num_heads)
+    
+    attn_scores, attn_output = scaled_dot_product_attention(query, key, value)
+    attn_output = linear_activation(combine_heads(attn_output), params[6], params[7])
+    
+    return attn_scores, attn_output
+
+
+# feed forward network
+def feed_forward_network(input, params):
+    out = linear_activation(input, params[0], params[1])
+    out = relu(out)
+    out = linear_activation(out, params[2], params[3])
+    
+    return out
+
+# decoder layer
+def transformer_encoder(input, num_heads, params):
+    attn_scores, attn_out = multi_head_self_attention(
+        query=input,
+        key=input, 
+        value=input, 
+        num_heads=num_heads, 
+        params=params[:8])
+    norm1 = layer_normalization(input + attn_out, params[12], params[13])
+    ff_out = feed_forward_network(norm1, params[8:12])
+    norm2 = layer_normalization(norm1 + ff_out, params[14], params[15])
+    
+    return attn_scores, norm2
+
+
+# model
+def transformer(input, num_heads, params):
+    out = positional_encoding(input)
+    
+    # decoder layers
+    _, out = transformer_encoder(out, num_heads, params[:16])
+    scores, out = transformer_encoder(out, num_heads, params[16:32])
+    
+    # final layer
+    out = linear_activation(out, params[32], params[33])
+    out = sigmoid(out)
+    
+    return scores, out
+
+# load parameters from file
+with open("bidirectional_parameters.json", "r") as parameters:
+    saved_params = json.load(parameters)
+
+# iterate through layer parameters
+params = []
+for key in saved_params.keys():
+    param = np.asarray(saved_params[key], dtype=np.float32)  # convert saved parameters back to numpy
+    params.append(param)
+    
+len(params)  # print number of layer parameters
+
+def inverse_transform(data):
+    data_min = initiate_model_instance_bi.dataset_min[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']].to_numpy()
+    data_max = initiate_model_instance_bi.dataset_max[['Waterlevel', 'Waterlevel.1', 'Waterlevel.2', 'Waterlevel.3']].to_numpy()
+    
+    return (data_max - data_min) * data + data_min
+
+
+def mean_absolute_error(y_true, y_pred):
+    return np.mean(np.abs(y_true - y_pred))
+
+
+
+
 
 
 def bi_forecast():
-    test_data = initiate_model_instance_bi.df[-180:].values
-    test_dates = initiate_model_instance_bi.df[-180:].index
-    test_dates = test_dates[60:240]
-
+    test_data = initiate_model_instance_bi.normalized_df[-180:].values
+    test_dates = initiate_model_instance_bi.normalized_df[-180:].index
+    test_dates = test_dates[60:240]    
     x_test = test_data[:180]
     y_label = test_data[60:]
-    y_label = initiate_model_instance_bi.label_scaler.inverse_transform(y_label[:, :4])
+    y_label = inverse_transform(y_label[:, :4])
 
     x_test = np.reshape(x_test, (1, x_test.shape[0], x_test.shape[1]))
 
-    decomposer.eval()  # set model on test mode
-
-    x_test = torch.from_numpy(x_test).float().to(initiate_model_instance_bi.device)
-    attn_scores, y_test = decomposer(x_test)  # make forecast
-    y_test = y_test.detach().cpu().numpy()
+    attn_scores, y_test = transformer(input=x_test, num_heads=NUM_HEADS, params=params)  # make forecast
     y_test = np.reshape(y_test, (y_test.shape[1], y_test.shape[2]))
-    y_test = initiate_model_instance_bi.label_scaler.inverse_transform(y_test[:, :4])
+    y_test = inverse_transform(y_test[:, :4])
 
 
     time_steps_per_day = 4  # Assuming 4 time steps per day (6 hours per time step)
     forecast_days = 15
-    
     mydb._open_connection()
     cursor = mydb.cursor()
-    cursor.execute("SELECT DateTime FROM rivercast.bidirectional_waterlevel_prediction order by DateTime DESC LIMIT 1")
+    cursor.execute("SELECT DateTime FROM rivercast_model.bidirectional_waterlevel_prediction order by DateTime DESC LIMIT 1")
     lastPredDT = cursor.fetchone()[0]
     formatted_lastPredDT = lastPredDT.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -308,7 +308,7 @@ def bi_forecast():
 
 
 
-    cursor.execute("SELECT DateTime FROM rivercast.bidirectional_waterlevel_obs order by DateTime DESC LIMIT 1")
+    cursor.execute("SELECT DateTime FROM rivercast_model.bidirectional_waterlevel_obs order by DateTime DESC LIMIT 1")
     lastTrueDT = cursor.fetchone()[0] + timedelta(hours=6)
 
     # Extract the forecast for the next 15 days
@@ -320,11 +320,11 @@ def bi_forecast():
 
     formatted_lastTrueDT = lastTrueDT.strftime('%Y-%m-%d %H:%M:%S')
 
-    mydb.close()
+    
 
     matches_and_following_rows = true_df[true_df['DateTime'] >= formatted_lastTrueDT]
 
-
+    mydb.close()
     return matches_and_following_rows_pred[1:2], matches_and_following_rows
 
 
@@ -376,41 +376,53 @@ def bi_getAttnScores(window=800, kernel_size=9):
     return attention_score_images
 
 
+test_data = initiate_model_instance_bi.normalized_df['2021-01-01':].values
+dataset_len = len(test_data) - (SEQ_LEN + SEQ_STEP) + 1
+
+# prepare batches
+batches = []
+for index in range(dataset_len):
+    in_start = index
+    in_end = in_start + SEQ_LEN
+    out_start = index + SEQ_STEP
+    out_end = out_start + SEQ_LEN
+    
+    input = test_data[in_start:in_end]
+    label = test_data[out_start:out_end, :PRED_SIZE]
+    
+    batches.append((np.array(input), np.array(label)))
+    
+
+
 def getBidirectionalMAE():
     # measure accuracy of each window
     accuracy = []
     predictions = []
-    date_times = []
-    for i in range(len(inputs)):
-        x_test = inputs[i:(i+1)].float().to(initiate_model_instance_bi.device)
-
-        attn_scores, y_test = decomposer(x_test)  # make forecast
-        y_test = torch.squeeze(y_test, dim=0)
-        y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
-        y_test = initiate_model_instance_bi.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
+    for input, label in batches:
         
-
-        # evaluate model accuracy
-        ground = torch.squeeze(labels[i:(i+1)], dim=0)  # get observed values
-        ground = ground.numpy()
-        ground = initiate_model_instance_bi.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
+        input = np.reshape(input, (1, SEQ_LEN, D_MODEL))
+        scores, pred = transformer(input=input, num_heads=NUM_HEADS, params=params)  # make forecast
+        pred = np.reshape(pred, (SEQ_LEN, PRED_SIZE))  
+        pred = inverse_transform(pred[:, :4])  # scale output to original value
+        pred = pred[-SEQ_STEP:]   # get only the forecast window
         
-
-        accuracy.append(mean_absolute_error(ground, y_test))  # collect mean absolute error of each window
-        predictions.append(np.concatenate((y_test[0], ground[0])))  # collect first element of output
-        date_times.append(initiate_model_instance_bi.df.index[i + len(initiate_model_instance_bi.df) - len(accuracy)])  # get corresponding DateTime
-
+        ground = inverse_transform(label[:, :4])  # scale output to original value
+        ground = ground[-SEQ_STEP:]  # get only the forecast window
         
+        accuracy.append(mean_absolute_error(ground, pred))  # collect mean absolute error of each window
+        predictions.append(np.concatenate((pred[0], ground[0])))  # collect first element of output
+    
+    
     accuracy_df = pd.DataFrame(np.array(accuracy), columns=['MAE'])
     predictions_df = pd.DataFrame(np.array(predictions), columns=['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3', 'T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3'])
     metric_df = pd.concat([accuracy_df, predictions_df], axis=1)
-    metric_df.index = initiate_model_instance_bi.df.index[-len(metric_df):]
+    metric_df.index = initiate_model_instance_bi.sampling.index[-len(metric_df):]
 
     metric_df = metric_df.resample('24H').max()
-    metric_df.to_csv('results_bi.csv')  # save test results
-    
-    pass_metric = pd.read_csv('results_bi.csv')
-    
+    metric_df.to_csv('bidirectional_results.csv')  # save test results
+
+    pass_metric = pd.read_csv('bidirectional_results.csv')
+
 
     a_MAEs = []
     t_MAEs = []
@@ -420,7 +432,7 @@ def getBidirectionalMAE():
 
     tMae = mean_absolute_error(metric_df[['T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3']], metric_df[['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3']])
     t_MAEs.append(tMae)
-    
+
     aveMAE = pd.DataFrame(np.array(a_MAEs), columns = ['aMAE'])
     tMAE = pd.DataFrame(np.array(t_MAEs), columns = ['tMAE'])
 
@@ -432,53 +444,8 @@ def getBidirectionalMAE():
     return pass_metric, pass_MAEs
 
 
-
 def getForecastforDateRangeFunction_bi():
-    test_data = initiate_model_instance_bi.df['2012-01-01':].values
 
-    test_dataset = TimeSeriesDataset(test_data, seq_len=SEQ_LEN, step=SEQ_STEP)
-
-    test_dataloader = torch.utils.data.DataLoader(
-        test_dataset,
-        batch_size=len(test_data),
-        shuffle=False,
-        drop_last=False
-    )
-
-    decomposer.load_state_dict(torch.load('bidirectional_transformer.pth'))  # load the trained model
-
-    decomposer.eval()  # set model on test mode
-
-    inputs, labels = [(inputs, labels) for _, (inputs, labels) in enumerate(test_dataloader)][0]  # fetch the test dataset
-
-    # measure accuracy of each window
-    accuracy = []
-    predictions = []
-    for i in range(len(inputs)):
-        x_test = inputs[i:(i+1)].float().to(initiate_model_instance_bi.device)
-
-        attn_scores, y_test = decomposer(x_test)  # make forecast
-        y_test = torch.squeeze(y_test, dim=0)
-        y_test = y_test.detach().cpu().numpy()  # transfer output from GPU to CPU
-        y_test = initiate_model_instance_bi.label_scaler.inverse_transform(y_test[:, :4])  # scale output to original value
-        
-        
-        # evaluate model accuracy
-        ground = torch.squeeze(labels[i:(i+1)], dim=0)  # get observed values
-        ground = ground.numpy()
-        ground = initiate_model_instance_bi.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
-        
-        
-        accuracy.append(mean_absolute_error(ground, y_test))  # collect mean absolute error of each window
-        predictions.append(np.concatenate((y_test[0], ground[0])))  # collect first element of output
-        
-    accuracy_df = pd.DataFrame(np.array(accuracy), columns=['MAE'])
-    predictions_df = pd.DataFrame(np.array(predictions), columns=['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3', 'T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3'])
-    metric_df = pd.concat([accuracy_df, predictions_df], axis=1)
-    metric_df.index = initiate_model_instance_bi.rawData.index[-len(metric_df):]
-
-    metric_df.to_csv('bidirectional_date_range.csv')  # save test results
-
-    pass_metric_df = pd.read_csv('bidirectional_date_range.csv')
+    pass_metric_df = pd.read_csv('numpy_bidirectional_date_range.csv')
 
     return pass_metric_df
