@@ -185,6 +185,8 @@ def rc_addMAE():
         method='multi',
     )
 
+    
+
     return jsonify("Add RC MAE to DB initiated")
 
 @app.route('/updateModelData', methods=['GET'])

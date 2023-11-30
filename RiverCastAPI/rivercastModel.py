@@ -448,8 +448,6 @@ for index in range(dataset_len):
     batches.append((np.array(input), np.array(label)))
 
 def getRiverCastMAE():
-
-
     # measure accuracy of each window
     accuracy = []
     predictions = []

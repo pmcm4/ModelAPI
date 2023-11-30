@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 import math
 import numpy as np
-from skimage.measure import block_reduce
 import io
 import json
 import mysql.connector
