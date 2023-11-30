@@ -11,6 +11,7 @@ import json
 import mysql.connector
 from datetime import datetime, timedelta
 
+
 mydb = mysql.connector.connect(
 host="localhost",
 user="root",
@@ -26,7 +27,7 @@ class initiate_model():
     def initialize_model(self):
 
         mydb._open_connection()
-        query = "SELECT * FROM rivercast_model.modelData;"
+        query = "SELECT * FROM rivercast_model.modeldata;"
         result_dataFrame = pd.read_sql(query, mydb)
 
 
@@ -431,7 +432,7 @@ def forecast():
     return matches_and_following_rows_pred[1:2], matches_and_following_rows
  
 
-test_data = initiate_model_instance.reduced_df['2021-01-01':].values
+test_data = initiate_model_instance.reduced_df['2021-03-15':].values
 dataset_len = len(test_data) - (SEQ_LEN + SEQ_STEP) + 1
 
 # prepare batches
@@ -486,6 +487,7 @@ def getRiverCastMAE():
     st_d = metric_df['MAE'].std()
     std_p.append(st_d)
 
+
     aveMAE = pd.DataFrame(np.array(a_MAEs), columns = ['aMAE'])
     pass_std = pd.DataFrame(np.array(std_p), columns = ['std'])
 
@@ -507,7 +509,7 @@ def getLatest_Datetime():
     mydb._open_connection()
     cursor = mydb.cursor()
 
-    cursor.execute("SELECT Date_Time FROM rivercast_model.modelData order by Date_Time DESC LIMIT 1")
+    cursor.execute("SELECT Date_Time FROM rivercast_model.modeldata order by Date_Time DESC LIMIT 1")
     lastDTindex = cursor.fetchone()
 
     

@@ -9,7 +9,9 @@ from sqlalchemy import create_engine, inspect, DateTime
 from PIL import Image
 from flask_cors import CORS  # Import CORS from flask_cors
 import os
-
+from statsmodels.stats.weightstats import ttest_ind
+import pandas as pd
+import numpy as np
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
@@ -199,14 +201,14 @@ def updateModelData():
 
         # Create an inspector and check if the table 'modelData' already exists in the database
         inspector = inspect(engine)
-        table_exists = inspector.has_table("modelData")
+        table_exists = inspector.has_table("modeldata")
 
         # If the table exists, append data without duplicates
         if table_exists:
-            dftosql.to_sql(name="modelData", con=engine, index=False, if_exists="append", index_label=False, method="multi", chunksize=1000)
+            dftosql.to_sql(name="modeldata", con=engine, index=False, if_exists="append", index_label=False, method="multi", chunksize=1000)
         else:
             # If the table doesn't exist, create it and insert the data
-            dftosql.to_sql(name="modelData", con=engine, index=False, if_exists="replace", index_label=False)
+            dftosql.to_sql(name="modeldata", con=engine, index=False, if_exists="replace", index_label=False)
 
         return jsonify("Model Data updated!")
     else:
@@ -330,6 +332,36 @@ def bi_updateDRdata():
     df.to_sql(name='bidirectional_daterange_data', con=engine, index=True, index_label='Datetime', if_exists='replace', method='multi', dtype={'Datetime': DateTime(50)})
 
     return jsonify("DateRange Data Updated")
+
+@app.route('/getPValue', methods=['GET'])
+def pVal():
+    # Call forecast function
+    rc = pd.read_csv('rivercast_results.csv')
+    bi = pd.read_csv('bidirectional_results.csv')
+    pVal = []
+
+    t_stat, p_value, degrees_of_freedom = ttest_ind(rc['MAE'], bi['MAE'], alternative='two-sided', usevar='pooled', weights=(None, None), value=0)
+
+    p_val = p_value
+
+    pVal.append(p_val)
+
+    pValDF = pd.DataFrame(np.array(pVal), columns = ['pValue'])
+
+    pValDF['cnt'] = pValDF.index
+
+    pValDF.set_index('cnt', inplace=True)
+
+    pValDF.to_sql(
+        name='pvalue',
+        con=engine,
+        index=True,
+        index_label='cnt',
+        if_exists='replace',
+        method='multi',
+    )
+
+    return jsonify("Added pValue")
 
 if __name__ == '__main__':
     app.run(debug=True)

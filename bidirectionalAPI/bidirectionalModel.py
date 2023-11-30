@@ -8,6 +8,7 @@ import json
 import mysql.connector
 from datetime import datetime, timedelta
 
+
 mydb = mysql.connector.connect(
 host="localhost",
 user="root",
@@ -317,7 +318,7 @@ def bi_forecast():
 
 
 
-test_data = initiate_model_instance_bi.normalized_df['2021-01-01':].values
+test_data = initiate_model_instance_bi.normalized_df['2021-03-15':].values
 dataset_len = len(test_data) - (SEQ_LEN + SEQ_STEP) + 1
 
 # prepare batches
