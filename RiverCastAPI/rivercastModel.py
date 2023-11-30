@@ -1,24 +1,15 @@
 import matplotlib.pyplot as plt
 import pandas as pd
 from datetime import datetime, timedelta
-import calendar
 import math
-import torch
-import torch.nn as nn
 import numpy as np
 import scipy as sc
-from sklearn.preprocessing import MinMaxScaler
-from skimage.measure import block_reduce
-from sklearn.metrics import mean_absolute_error
-import io
 import requests
 from metpy.calc import specific_humidity_from_dewpoint
 from metpy.units import units
 import json
-
 import mysql.connector
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine
 
 mydb = mysql.connector.connect(
 host="localhost",
@@ -33,9 +24,6 @@ class initiate_model():
         self.initialize_model()
 
     def initialize_model(self):
-
-        #IMPORTING
-        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # configure GPU    utilization
 
         mydb._open_connection()
         query = "SELECT * FROM rivercast_model.modelData;"
@@ -492,18 +480,18 @@ def getRiverCastMAE():
 
 
     a_MAEs = []
-    t_MAEs = []
+    std_p = []
 
     aMAE = metric_df['MAE'].mean()
     a_MAEs.append(aMAE)
 
-    tMae = mean_absolute_error(metric_df[['T_Waterlevel', 'T_Waterlevel.1', 'T_Waterlevel.2', 'T_Waterlevel.3']], metric_df[['P_Waterlevel', 'P_Waterlevel.1', 'P_Waterlevel.2', 'P_Waterlevel.3']])
-    t_MAEs.append(tMae)
+    st_d = metric_df['MAE'].std()
+    std_p.append(st_d)
 
     aveMAE = pd.DataFrame(np.array(a_MAEs), columns = ['aMAE'])
-    tMAE = pd.DataFrame(np.array(t_MAEs), columns = ['tMAE'])
+    pass_std = pd.DataFrame(np.array(std_p), columns = ['std'])
 
-    pass_MAEs = pd.concat([aveMAE, tMAE], axis=1)
+    pass_MAEs = pd.concat([aveMAE, pass_std], axis=1)
 
     pass_MAEs['cnt'] = pass_MAEs.index
 
@@ -781,43 +769,3 @@ def updateMainData():
     merged_df.to_csv('consolidated_data.csv', index=False)
 
     return merged_df, updatedData
-
-
-
-def getAttnScores(window=240, kernel_size=15):
-    x_test = input[window:(window+1)].float().to(initiate_model_instance.device)
-
-    attn_scores, y_test = transformer(input=x_test, num_heads=NUM_HEADS, params=params)
-    y_test = inverse_transform(y_test[:, :4])  # scale output to original value
-    y_test = y_test[-SEQ_STEP:]  # get only the forecast window
-
-    ground = torch.squeeze(label[window:(window+1)], dim=0)  # get observed values
-    ground = ground.numpy()
-    ground = initiate_model_instance.label_scaler.inverse_transform(ground[:, :4])  # scale output to original value
-    ground = ground[-SEQ_STEP:]  # get only the forecast window
-
-        # plot predictions
-    for i in [0, 1, 2, 3]:
-        plt.plot(np.convolve(y_test[:, i], np.ones(30), 'valid') / 30)
-        plt.plot(ground[30:, i], color='k', alpha=0.3)
-        plt.show()
-    
-    attention_score_images = []
-
-    for idx, attention in enumerate(attn_scores):
-        selected_attention = attention[10:]
-        selected_attention = block_reduce(selected_attention, (kernel_size, kernel_size), np.max)
-
-        fig, ax = plt.subplots()
-        ax.matshow(selected_attention, cmap='viridis')
-
-        # Save the plot to a BytesIO object
-        image_stream = io.BytesIO()
-        plt.savefig(image_stream, format='png')
-        image_stream.seek(0)
-
-        # Append the image stream to the list
-        attention_score_images.append(image_stream)
-
-    # Return the list of attention score images
-    return attention_score_images

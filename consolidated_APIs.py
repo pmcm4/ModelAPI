@@ -1,22 +1,13 @@
 from flask import Flask, jsonify, send_file, g
-import io
-from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, getAttnScores, updateMainData, getRiverCastMAE, getForecastforDateRangeFunction
-from bidirectionalAPI.bidirectionalModel import initiate_model_instance_bi, bi_getAttnScores, bi_forecast, getBidirectionalMAE, getForecastforDateRangeFunction_bi
+from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, updateMainData, getRiverCastMAE, getForecastforDateRangeFunction
+from bidirectionalAPI.bidirectionalModel import initiate_model_instance_bi, bi_forecast, getBidirectionalMAE, getForecastforDateRangeFunction_bi
 import matplotlib
 matplotlib.use('Agg')  # Use a non-GUI backend
 import matplotlib.pyplot as plt
-import requests
-import csv
-from datetime import datetime, timedelta
-from datetime import date
-import pymysql
 import mysql.connector
 from sqlalchemy import create_engine, inspect, DateTime
 from PIL import Image
 from flask_cors import CORS  # Import CORS from flask_cors
-import pandas as pd
-from sqlalchemy.exc import NoSuchTableError
-from io import BytesIO
 import os
 
 
@@ -107,23 +98,6 @@ def rc_clean_data_plot():
     return send_file(image_path, mimetype='image/png')
 
 
-@app.route('/RC_attention_scores', methods=['GET'])
-def attention_scores():
-    attn_score_images = getAttnScores()
-
-    # Create a composite image containing all attention score images
-    composite_image = create_composite_image(attn_score_images)
-
-    # Save the composite image to a BytesIO object
-    composite_image_stream = io.BytesIO()
-    composite_image.savefig(composite_image_stream, format='png')
-    composite_image_stream.seek(0)
-
-    # Close the figure to clear the plot
-    plt.close(composite_image)
-
-    # Send the composite image as a response
-    return send_file(composite_image_stream, mimetype='image/png')
 
 def create_composite_image(images):
     # Create a composite image horizontally stacking all attention score images
@@ -273,22 +247,6 @@ def bi_clean_data_plot():
 
     return send_file(image_stream, mimetype='image/png')
 
-
-@app.route('/bidirectional_attention_scores', methods=['GET'])
-def bi_attention_scores():
-    
-    attn_score_images = bi_getAttnScores()
-
-    # Create a composite image containing all attention scores
-    composite_image = create_composite_image(attn_score_images)
-
-    # Save the composite image to a BytesIO object
-    composite_image_stream = io.BytesIO()
-    composite_image.savefig(composite_image_stream, format='png')
-    composite_image_stream.seek(0)
-
-    # Send the composite image as a response
-    return send_file(composite_image_stream, mimetype='image/png')
 
 @app.route('/addBiPredictionToDB', methods=['GET'])
 def bi_addPrediction():
