@@ -1,8 +1,6 @@
 from flask import Flask, jsonify, send_file, g
 from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, updateMainData, getRiverCastMAE, getForecastforDateRangeFunction
 from bidirectionalAPI.bidirectionalModel import initiate_model_instance_bi, bi_forecast, getBidirectionalMAE, getForecastforDateRangeFunction_bi
-import matplotlib
-matplotlib.use('Agg')  # Use a non-GUI backend
 import matplotlib.pyplot as plt
 import mysql.connector
 from sqlalchemy import create_engine, inspect, DateTime
@@ -362,6 +360,15 @@ def pVal():
     )
 
     return jsonify("Added pValue")
+
+@app.route('/tempupdates', methods=['GET'])
+def tempupdates():
+    df = pd.read_csv('bidirectional_results_daterange.csv')
+    
+    df.set_index('Datetime', inplace=True)
+    df.to_sql(name='bidirectional_daterange_data', con=engine, index=True, index_label='Datetime', if_exists='replace', method='multi', dtype={'Datetime': DateTime(50)})
+
+    return jsonify("DateRange Data Updated")
 
 if __name__ == '__main__':
     app.run(debug=True)
