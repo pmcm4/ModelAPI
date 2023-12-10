@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, send_file, g
-from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, updateMainData, getRiverCastMAE, getForecastforDateRangeFunction
+from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, updateMainData, getRiverCastMAE, getForecastforDateRangeFunction, get_parameters
 from bidirectionalAPI.bidirectionalModel import initiate_model_instance_bi, bi_forecast, getBidirectionalMAE, getForecastforDateRangeFunction_bi
 import matplotlib.pyplot as plt
 import mysql.connector
@@ -18,8 +18,8 @@ CORS(app, supports_credentials=True)
 DB_CONFIG = {
     "host": "localhost",
     "user": "root",
-    "password": "pmcm4",
-    "database": "rivercast_model"
+    "password": "1234",
+    "database": "rivercast"
 }
 
 def get_db():
@@ -40,7 +40,7 @@ def before_request():
 def teardown_request(e=None):
     close_db()
 
-engine = create_engine("mysql+pymysql://" + "root" + ":" + "pmcm4" + "@" + "localhost" + "/" + "rivercast_model")
+engine = create_engine("mysql+pymysql://" + "root" + ":" + "1234" + "@" + "localhost" + "/" + "rivercast")
 
 # RIVERCAST APIs
 
@@ -195,7 +195,7 @@ def updateModelData():
 
     if update_result[1] != "Data are up-to-date":
         dftosql = update_result[0]
-        engine = create_engine("mysql+pymysql://" + "root" + ":" + "pmcm4" + "@" + "localhost" + "/" + "rivercast_model")
+        engine = create_engine("mysql+pymysql://" + "root" + ":" + "1234" + "@" + "localhost" + "/" + "rivercast")
 
         # Create an inspector and check if the table 'modelData' already exists in the database
         inspector = inspect(engine)
@@ -369,6 +369,16 @@ def tempupdates():
     df.to_sql(name='bidirectional_daterange_data', con=engine, index=True, index_label='Datetime', if_exists='replace', method='multi', dtype={'Datetime': DateTime(50)})
 
     return jsonify("DateRange Data Updated")
+
+
+@app.route('/get_parameters', methods=['GET'])
+def get_params():
+    df = get_parameters()
+    
+    df.to_sql(name='parameters', con=engine, index=False, if_exists='replace', method='multi')
+
+    return jsonify("Parameters updated")
+
 
 if __name__ == '__main__':
     app.run(debug=True)

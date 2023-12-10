@@ -15,8 +15,8 @@ from datetime import datetime, timedelta
 mydb = mysql.connector.connect(
 host="localhost",
 user="root",
-password="pmcm4",
-database= "rivercast_model"
+password="1234",
+database= "rivercast"
 )
 
 class initiate_model():
@@ -27,7 +27,7 @@ class initiate_model():
     def initialize_model(self):
 
         mydb._open_connection()
-        query = "SELECT * FROM rivercast_model.modeldata;"
+        query = "SELECT * FROM rivercast.modeldata;"
         result_dataFrame = pd.read_sql(query, mydb)
 
 
@@ -399,7 +399,7 @@ def forecast():
     forecast_days = 15
     mydb._open_connection()
     cursor = mydb.cursor()
-    cursor.execute("SELECT DateTime FROM rivercast_model.rivercast_waterlevel_prediction order by DateTime DESC LIMIT 1")
+    cursor.execute("SELECT DateTime FROM rivercast.rivercast_waterlevel_prediction order by DateTime DESC LIMIT 1")
     lastPredDT = cursor.fetchone()[0]
     formatted_lastPredDT = lastPredDT.strftime('%Y-%m-%d %H:%M:%S')
     # Extract the forecast for the next 15 days
@@ -414,7 +414,7 @@ def forecast():
 
 
 
-    cursor.execute("SELECT DateTime FROM rivercast_model.rivercast_waterlevel_obs order by DateTime DESC LIMIT 1")
+    cursor.execute("SELECT DateTime FROM rivercast.rivercast_waterlevel_obs order by DateTime DESC LIMIT 1")
     lastTrueDT = cursor.fetchone()[0] + timedelta(hours=6)
 
     # Extract the forecast for the next 15 days
@@ -509,7 +509,7 @@ def getLatest_Datetime():
     mydb._open_connection()
     cursor = mydb.cursor()
 
-    cursor.execute("SELECT Date_Time FROM rivercast_model.modeldata order by Date_Time DESC LIMIT 1")
+    cursor.execute("SELECT Date_Time FROM rivercast.modeldata order by Date_Time DESC LIMIT 1")
     lastDTindex = cursor.fetchone()
 
     
@@ -769,3 +769,12 @@ def updateMainData():
     merged_df.to_csv('consolidated_data.csv', index=False)
 
     return merged_df, updatedData
+
+
+
+def get_parameters():
+
+    r_df = initiate_model_instance.rawData.tail(1)
+    pass_df =  pd.DataFrame(r_df)
+
+    return pass_df

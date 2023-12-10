@@ -12,8 +12,8 @@ from datetime import datetime, timedelta
 mydb = mysql.connector.connect(
 host="localhost",
 user="root",
-password="pmcm4",
-database= "rivercast_model"
+password="1234",
+database= "rivercast"
 )
 
 class bi_initiate_model():
@@ -24,7 +24,7 @@ class bi_initiate_model():
         #IMPORTING
 
         mydb._open_connection()
-        query = "SELECT * FROM rivercast_model.modelData;"
+        query = "SELECT * FROM rivercast.modelData;"
         result_dataFrame = pd.read_sql(query, mydb)
         
 
@@ -281,7 +281,7 @@ def bi_forecast():
     forecast_days = 15
     mydb._open_connection()
     cursor = mydb.cursor()
-    cursor.execute("SELECT DateTime FROM rivercast_model.bidirectional_waterlevel_prediction order by DateTime DESC LIMIT 1")
+    cursor.execute("SELECT DateTime FROM rivercast.bidirectional_waterlevel_prediction order by DateTime DESC LIMIT 1")
     lastPredDT = cursor.fetchone()[0]
     formatted_lastPredDT = lastPredDT.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -297,7 +297,7 @@ def bi_forecast():
 
 
 
-    cursor.execute("SELECT DateTime FROM rivercast_model.bidirectional_waterlevel_obs order by DateTime DESC LIMIT 1")
+    cursor.execute("SELECT DateTime FROM rivercast.bidirectional_waterlevel_obs order by DateTime DESC LIMIT 1")
     lastTrueDT = cursor.fetchone()[0] + timedelta(hours=6)
 
     # Extract the forecast for the next 15 days
