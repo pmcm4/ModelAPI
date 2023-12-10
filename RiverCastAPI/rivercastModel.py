@@ -778,3 +778,66 @@ def get_parameters():
     pass_df =  pd.DataFrame(r_df)
 
     return pass_df
+
+
+def get_added_params():
+    # Get the current datetime
+    current_datetime = datetime.now()
+
+    api_key = '0e0b9299ef62428f9deafe70a3f4d39a'
+    # Weather data for location 1
+    weatherbit_url1 = f'https://api.weatherbit.io/v2.0/current?lat=14.636063697609517&lon=121.09320016726963&key={api_key}'
+    response1 = requests.get(weatherbit_url1)
+    data1 = response1.json()
+
+    # Weather data for location 2
+    weatherbit_url2 = f'https://api.weatherbit.io/v2.0/current?lat=14.673803785437409&lon=121.10951228864191&key={api_key}'
+    response2 = requests.get(weatherbit_url2)
+    data2 = response2.json()
+
+    # Weather data for location 3
+    weatherbit_url3 = f'https://api.weatherbit.io/v2.0/current?lat=14.733416817860283&lon=121.13032299916969&key={api_key}'
+    response3 = requests.get(weatherbit_url3)
+    data3 = response3.json()
+
+    # Extract relevant information for location 1
+    current_weather1 = data1['data'][0]
+    loc1_temp = current_weather1['temp']
+    loc1_dewpoint = current_weather1['dewpt']
+    loc1_pressure = current_weather1['pres']
+    loc1_humidity = specific_humidity_from_dewpoint(loc1_pressure * units.hPa, loc1_dewpoint * units.degC).to('g/kg').magnitude
+    loc1_precipitation = current_weather1.get('precip', 0)
+
+    # Extract relevant information for location 2
+    current_weather2 = data2['data'][0]
+    loc2_temp = current_weather2['temp']
+    loc2_dewpoint = current_weather2['dewpt']
+    loc2_pressure = current_weather2['pres']
+    loc2_humidity = specific_humidity_from_dewpoint(loc2_pressure * units.hPa, loc2_dewpoint * units.degC).to('g/kg').magnitude
+    loc2_precipitation = current_weather2.get('precip', 0)
+
+    # Extract relevant information for location 3
+    current_weather3 = data3['data'][0]
+    loc3_temp = current_weather3['temp']
+    loc3_dewpoint = current_weather3['dewpt']
+    loc3_pressure = current_weather3['pres']
+    loc3_humidity = specific_humidity_from_dewpoint(loc3_pressure * units.hPa, loc3_dewpoint * units.degC).to('g/kg').magnitude
+    loc3_precipitation = current_weather3.get('precip', 0)
+
+    # Create a DataFrame
+    data = {
+        'loc1_temp': [loc1_temp],
+        'loc1_humidity': [loc1_humidity],
+        'loc1_precipitation': [loc1_precipitation],
+        'loc2_temp': [loc2_temp],
+        'loc2_humidity': [loc2_humidity],
+        'loc2_precipitation': [loc2_precipitation],
+        'loc3_temp': [loc3_temp],
+        'loc3_humidity': [loc3_humidity],
+        'loc3_precipitation': [loc3_precipitation],
+        'Datetime': [current_datetime]
+    }
+
+    current_weather_df = pd.DataFrame(data)
+
+    return current_weather_df

@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, send_file, g
-from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, updateMainData, getRiverCastMAE, getForecastforDateRangeFunction, get_parameters
+from RiverCastAPI.rivercastModel import forecast, initiate_model_instance, updateMainData, getRiverCastMAE, getForecastforDateRangeFunction, get_parameters, get_added_params
 from bidirectionalAPI.bidirectionalModel import initiate_model_instance_bi, bi_forecast, getBidirectionalMAE, getForecastforDateRangeFunction_bi
 import matplotlib.pyplot as plt
 import mysql.connector
@@ -378,6 +378,14 @@ def get_params():
     df.to_sql(name='parameters', con=engine, index=False, if_exists='replace', method='multi')
 
     return jsonify("Parameters updated")
+
+@app.route('/get_added_parameters', methods=['GET'])
+def added_params():
+    df = get_added_params()
+    
+    df.to_sql(name='added_parameters', con=engine, index=False, if_exists='replace', method='multi')
+
+    return jsonify("Added Parameters updated")
 
 
 if __name__ == '__main__':
