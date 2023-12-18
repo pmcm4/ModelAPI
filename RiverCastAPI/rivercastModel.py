@@ -553,7 +553,7 @@ def updateMainData():
     endDate = edate.strftime("%Y-%m-%d:%H")
 
     # Weather data
-    weatherbit = f'https://api.weatherbit.io/v2.0/history/hourly?lat=14.679696901082357&lon=121.10970052493437&start_date={startDate}&end_date={endDate}&tz=local&key=2b382660ad4843188647514206bf330e'
+    weatherbit = f'https://api.weatherbit.io/v2.0/history/hourly?lat=14.679696901082357&lon=121.10970052493437&start_date={startDate}&end_date={endDate}&tz=local&key=0e0b9299ef62428f9deafe70a3f4d39a'
     wbRes = requests.get(weatherbit)
     wbReq = wbRes.json()
     try:
